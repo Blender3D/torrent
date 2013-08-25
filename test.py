@@ -59,11 +59,13 @@ class TestBencodeDecode(unittest.TestCase):
         self.assertRaises(ValueError, bencode.bdecode, 'di1ei1ee')
 
     def test_edge_cases(self):
-        self.assertRaises(ValueError, bencode.bdecode, '04:test')
         self.assertRaises(ValueError, bencode.bdecode, 'i-0e')
-        self.assertRaises(ValueError, bencode.bdecode, 'i01e')
         self.assertRaises(ValueError, bencode.bdecode, '')
 
+class TestTorrentMetadataReader(unittest.TestCase):
+    def test_read(self):
+        with open('ubuntu-13.04-desktop-amd64.iso.torrent', 'rb') as handle:
+            metadata = bencode.bdecode(handle.read())
 
 if __name__ == '__main__':
     unittest.main()

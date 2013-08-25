@@ -19,9 +19,7 @@ def bencode(obj):
         raise TypeError('Unsupported type: {0}'.format(type(obj)))
 
 def bdecode(data):
-    stream = LookaheadIterator(iter(data))
-
-    return consume(stream)
+    return consume(LookaheadIterator(data))
 
 def consume(stream):
     item = stream.next_item
@@ -51,7 +49,6 @@ class LookaheadIterator(collections.Iterator):
         return next(self.iterator)
 
 def consume_number(stream):
-    is_zero = False
     result = ''
 
     while True:
@@ -59,10 +56,6 @@ def consume_number(stream):
 
         if not chunk.isdigit():
             return result
-        elif is_zero:
-            raise ValueError('Numbers cannot have leading zeroes')
-        elif chunk == '0':
-            is_zero = True
 
         next(stream)
         result += chunk
