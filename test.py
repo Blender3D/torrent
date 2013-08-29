@@ -4,7 +4,6 @@ import bencode
 class TestBencodeEncode(unittest.TestCase):
     def test_string(self):
         self.assertEquals(bencode.bencode('test'), '4:test')
-        self.assertRaises(UnicodeEncodeError, bencode.bencode, u'\u041c\u043e\u0441\u043a\u0432\u0430')
 
     def test_int(self):
         self.assertEquals(bencode.bencode(12), 'i12e')
@@ -64,8 +63,14 @@ class TestBencodeDecode(unittest.TestCase):
 
 class TestTorrentMetadataReader(unittest.TestCase):
     def test_read(self):
+        import json
+
         with open('ubuntu-13.04-desktop-amd64.iso.torrent', 'rb') as handle:
-            metadata = bencode.bdecode(handle.read())
+            with open('ubuntu-13.04-desktop-amd64.iso.json', 'wb') as output:
+                metadata = bencode.bdecode(handle.read())
+                #data = json.dumps(metadata)
+
+                output.write(repr(metadata))
 
 if __name__ == '__main__':
     unittest.main()
