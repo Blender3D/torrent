@@ -1,6 +1,7 @@
 import logging
 import socket
 import struct
+import random
 
 from torrent import Torrent
 from tracker import Tracker
@@ -34,20 +35,30 @@ class Client(object):
 
         self.handshake()
 
+    def read_bytes(self, bytes):
+        return Task(self.stream.read_bytes, bytes)
+
+    def write(self, data):
+        return Task(self.stream.write, data)
+
+    def send_message(self, message):
+        logging.info('Sending a %s', message.__class__.__name__)
+        return self.write(message.pack())
+
     @coroutine
     def get_message(self):
-        bytes = yield Task(self.stream.read_bytes, 4)
+        bytes = yield self.read_bytes(4)
         length = struct.unpack('!I', bytes)[0]
 
         if length == 0:
             raise Return(KeepAlive())
 
-        id = ord((yield Task(self.stream.read_bytes, 1)))
+        id = ord((yield self.read_bytes(1)))
 
         if id not in Messages:
             raise ValueError('Invalid message type')
 
-        data = yield Task(self.stream.read_bytes, length - 1)
+        data = yield self.read_bytes(length - 1)
         result = (Messages[id], Messages[id].unpack(data))
 
         raise Return(result)
@@ -58,9 +69,23 @@ class Client(object):
 
         while True:
             message_type, message = yield self.get_message()
+            logging.info('Client sent us a %s', message.__class__.__name__)
 
-            print message_type, repr(message)
+            if isinstance(message, Unchoke):
+                result = yield self.send_message(Unchoke())
 
+                for i in range(10):
+                    while True:
+                        piece = random.choice(self.peer_pieces)
+
+                        if self.peer_pieces[piece]:
+                            break
+
+                    result = yield self.send_message(Request(piece, 0, 100))
+            elif isinstance(message, Bitfield):
+                self.peer_pieces = message.bitfield
+            elif isinstance(message, Have):
+                self.peer_pieces[message.piece] = True
 
     @coroutine
     def handshake(self):
@@ -68,19 +93,18 @@ class Client(object):
         message += self.protocol
         message += '\x00' * 8
         message += self.server.torrent.info_hash()
+        message += self.server.peer_id
 
-        logging.info('Sending a handshake: %s', repr(message))
-        result = yield Task(self.stream.write, message)
+        logging.info('Sending a handshake')
+        result = yield self.write(message)
 
         logging.info('Listening for a handshake')
 
-        protocol_length = yield Task(self.stream.read_bytes, 1)
-        protocol_name = yield Task(self.stream.read_bytes, ord(protocol_length))
-        reserved_bytes = yield Task(self.stream.read_bytes, 8)
-        info_hash = yield Task(self.stream.read_bytes, 20)
-
-        yield Task(self.stream.write, self.server.peer_id)
-        peer_id = yield Task(self.stream.read_bytes, 20)
+        protocol_length = yield self.read_bytes(1)
+        protocol_name = yield self.read_bytes(ord(protocol_length))
+        reserved_bytes = yield self.read_bytes(8)
+        info_hash = yield self.read_bytes(20)
+        peer_id = yield self.read_bytes(20)
 
         logging.info('Shook hands with %s', repr(peer_id))
 
@@ -112,7 +136,7 @@ class Server(TCPServer):
         stream = IOStream(sock)
         stream.connect((peer.address, peer.port))
 
-        Client(stream, peer, self)
+        return Client(stream, peer, self)
 
     def listen(self, port, address=""):
         self.port = port

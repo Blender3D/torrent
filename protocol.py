@@ -137,9 +137,9 @@ class Piece(Message):
 
     @classmethod
     def unpack_body(cls, data):
-        index, begin = self.body_struct.unpack(data[:self.body_struct.size])
+        index, begin = cls.body_struct.unpack(data[:cls.body_struct.size])
 
-        return index, begin, data[self.body_struct.size:]
+        return index, begin, data[cls.body_struct.size:]
 
 class Cancel(Message):
     id = 8
