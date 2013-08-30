@@ -1,26 +1,30 @@
 import unittest
+import struct
+
 import bencode
+
+from protocol import KeepAlive, Choke, Have, Bitfield
 
 class TestBencodeEncode(unittest.TestCase):
     def test_string(self):
-        self.assertEquals(bencode.bencode('test'), '4:test')
+        self.assertEqual(bencode.bencode('test'), '4:test')
 
     def test_int(self):
-        self.assertEquals(bencode.bencode(12), 'i12e')
-        self.assertEquals(bencode.bencode(-12), 'i-12e')
-        self.assertEquals(bencode.bencode(-0), 'i0e')
+        self.assertEqual(bencode.bencode(12), 'i12e')
+        self.assertEqual(bencode.bencode(-12), 'i-12e')
+        self.assertEqual(bencode.bencode(-0), 'i0e')
 
     def test_list(self):
-        self.assertEquals(bencode.bencode([]), 'le')
-        self.assertEquals(bencode.bencode([
+        self.assertEqual(bencode.bencode([]), 'le')
+        self.assertEqual(bencode.bencode([
             ['test', 2], [
                 ['foo'], [3]
             ]
         ]), 'll4:testi2eell3:fooeli3eeee')
 
     def test_dict(self):
-        self.assertEquals(bencode.bencode({}), 'de')
-        self.assertEquals(bencode.bencode({
+        self.assertEqual(bencode.bencode({}), 'de')
+        self.assertEqual(bencode.bencode({
             'test': 12,
             'foo': [
                 'bar',
@@ -30,24 +34,24 @@ class TestBencodeEncode(unittest.TestCase):
 
 class TestBencodeDecode(unittest.TestCase):
     def test_string(self):
-        self.assertEquals(bencode.bdecode('4:test'), 'test')
+        self.assertEqual(bencode.bdecode('4:test'), 'test')
 
     def test_int(self):
-        self.assertEquals(bencode.bdecode('i12e'), 12)
-        self.assertEquals(bencode.bdecode('i-12e'), -12)
-        self.assertEquals(bencode.bdecode('i0e'), 0)
+        self.assertEqual(bencode.bdecode('i12e'), 12)
+        self.assertEqual(bencode.bdecode('i-12e'), -12)
+        self.assertEqual(bencode.bdecode('i0e'), 0)
 
     def test_list(self):
-        self.assertEquals(bencode.bdecode('le'), [])
-        self.assertEquals(bencode.bdecode('ll4:testi2eell3:fooeli3eeee'), [
+        self.assertEqual(bencode.bdecode('le'), [])
+        self.assertEqual(bencode.bdecode('ll4:testi2eell3:fooeli3eeee'), [
             ['test', 2], [
                 ['foo'], [3]
             ]
         ])
 
     def test_dict(self):
-        self.assertEquals(bencode.bdecode('de'), {})
-        self.assertEquals(bencode.bdecode('d3:fool3:bard4:testl5:againi12eeee4:testi12ee'), {
+        self.assertEqual(bencode.bdecode('de'), {})
+        self.assertEqual(bencode.bdecode('d3:fool3:bard4:testl5:againi12eeee4:testi12ee'), {
             'test': 12,
             'foo': [
                 'bar',
@@ -71,6 +75,32 @@ class TestTorrentMetadataReader(unittest.TestCase):
                 #data = json.dumps(metadata)
 
                 output.write(repr(metadata))
+
+class TestProtocolMessages(unittest.TestCase):
+    def test_keep_alive(self):
+        self.assertIsInstance(KeepAlive.unpack(''), KeepAlive)
+        self.assertIsInstance(KeepAlive.unpack(KeepAlive().pack(), with_header=True), KeepAlive)
+
+    def test_choke(self):
+        self.assertIsInstance(Choke.unpack(''), Choke)
+        self.assertIsInstance(Choke.unpack(Choke().pack(), with_header=True), Choke)
+
+    def test_have(self):
+        self.assertEqual(Have.unpack(Have(piece=123).pack(), with_header=True).piece, 123)
+        self.assertRaises(struct.error, Have(piece=12345678910).pack)
+
+    def test_bitfield(self):
+        self.assertEqual(Bitfield.unpack(Bitfield({
+            0: True,
+            1: False,
+            2: False,
+            3: True
+        }).pack(), with_header=True).bitfield, {
+            0: True,
+            1: False,
+            2: False,
+            3: True
+        })
 
 if __name__ == '__main__':
     unittest.main()

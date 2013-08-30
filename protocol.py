@@ -1,58 +1,98 @@
-import struct
 import inspect
+from struct import Struct
 
 class Message(object):
     id = None
-    structure = None
+    header_struct = Struct('!IB')
+    body_struct = None
+
+    def header(self, body):
+        return self.header_struct.pack(len(body) + 1, self.id)
+
+    def pack_body(self):
+        raise NotImplementedError()
 
     @classmethod
-    def _pack(cls, *args):
-        return struct.pack(cls.structure, *args)
+    def unpack_body(cls, data):
+        return cls.body_struct.unpack(data)
+
+    def pack(self, with_header=True):
+        body = self.pack_body()
+
+        if not with_header:
+            return body
+        else:
+            return self.header(body) + body
 
     @classmethod
-    def _unpack(cls, data):
-        result = struct.unpack(cls.structure, data)
+    def unpack(cls, data, with_header=False):
+        if with_header:
+            header, body = data[:cls.header_struct.size], data[cls.header_struct.size:]
+            length, id = cls.header_struct.unpack(header)
 
-        return result[0] if len(result) == 1 else result
+            assert len(body) == length - 1
+            assert id == cls.id
+
+            data = body
+
+        return cls(*cls.unpack_body(data))
+
+class BodylessMessage(Message):
+    def pack_body(self):
+        return ''
 
     @classmethod
-    def pack(cls, *args):
-        data = cls._pack(*args) if cls.structure else ''
+    def unpack_body(cls, data):
+        assert data == ''
 
-        return struct.pack('!I', len(data)) + data
+        return ()
+
+class KeepAlive(BodylessMessage):
+    def header(self, body):
+        return '\x00\x00\x00\x00'
 
     @classmethod
-    def unpack(cls, data):
-        return cls._unpack(data)
+    def unpack(cls, data, with_header=False):
+        if with_header:
+            assert data == '\x00\x00\x00\x00'
+        else:
+            assert data == ''
 
-class KeepAlive(Message):
-    pass
+        return cls()
 
-class Choke(Message):
+class Choke(BodylessMessage):
     id = 0
 
-class Unchoke(Message):
+class Unchoke(BodylessMessage):
     id = 1
 
-class Interested(Message):
+class Interested(BodylessMessage):
     id = 2
 
-class NotInterested(Message):
+class NotInterested(BodylessMessage):
     id = 3
 
 class Have(Message):
     id = 4
-    structure = '!I'
+    body_struct = Struct('!I')
+
+    def __init__(self, piece):
+        self.piece = piece
+
+    def pack_body(self):
+        return self.body_struct.pack(self.piece)
 
 class Bitfield(Message):
     id = 5
 
-    @classmethod
-    def _pack(cls, bitfield):
+    def __init__(self, bitfield):
+        self.bitfield = bitfield
+
+    def pack_body(self):
         data = ''
 
-        bits = ''.join(str(int(bitfield[i])) for i in range(max(bitfield) + 1))
-        bits += '0' * (len(bits) % 8)
+        bits = ''.join(str(int(self.bitfield[i])) for i in range(max(self.bitfield) + 1))
+        bits = '0' * (8 - len(bits) % 8) + bits
 
         for index in range(0, len(bits), 8):
             data += chr(int(bits[index:index + 8], 2))
@@ -60,42 +100,67 @@ class Bitfield(Message):
         return data
 
     @classmethod
-    def _unpack(cls, data):
+    def unpack_body(cls, data):
         d = {}
         index = 0
 
         for char in data:
-            ordinal = bin(ord(char))[2:].zfill(8)
-
-            for bit in ordinal:
+            for bit in bin(ord(char))[2:]:
                 d[index] = bool(int(bit))
                 index += 1
 
-        return d
+        return (d,)
 
 class Request(Message):
     id = 6
-    structure = '!III'
+    body_struct = Struct('!III')
+
+    def __init__(self, index, begin, length):
+        self.index = index
+        self.begin = begin
+        self.length = length
+
+    def pack_body(self):
+        return self.body_struct.pack(self.index, self.begin, self.length)
 
 class Piece(Message):
     id = 7
+    body_struct = Struct('!II')
+
+    def __init__(self, index, begin, block):
+        self.index = index
+        self.begin = begin
+        self.block = block
+
+    def pack_body(self):
+        return self.body_struct.pack(self.index, self.begin) + self.block
 
     @classmethod
-    def _pack(cls, index, begin, block):
-        return struct.pack('!II', index, begin) + block
+    def unpack_body(cls, data):
+        index, begin = self.body_struct.unpack(data[:self.body_struct.size])
 
-    @classmethod
-    def _unpack(cls, data):
-        index, begin = struct.unpack('!II', data[:8])
-
-        return index, begin, data[8:]
+        return index, begin, data[self.body_struct.size:]
 
 class Cancel(Message):
     id = 8
     structure = '!III'
 
+    def __init__(self, index, begin, length):
+        self.index = index
+        self.begin = begin
+        self.length = length
+
+    def pack_body(self):
+        return self.body_struct.pack(self.index, self.begin, self.length)
+
 class Port(Message):
     id = 9
     structure = '!I'
+
+    def __init__(self, port):
+        self.port = port
+
+    def pack_body(self):
+        return self.body_struct.pack(self.port)
 
 Messages = {cls.id: cls for name, cls in locals().items() if inspect.isclass(cls) and issubclass(cls, Message)}
