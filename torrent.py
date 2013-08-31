@@ -19,7 +19,7 @@ class Torrent(object):
                 try:
                     self.meta = bencode.bdecode(handle)
                 except ValueError:
-                    raise TypeError('handle must be a file, a dict, a path, or a bencoded string. Got: {0}'.format(type(handle)))
+                    raise TypeError('handle must be a file, dict, path, or bencoded string. Got: {0}'.format(type(handle)))
         elif hasattr(handle, 'read'):
             self.meta = bencode.bdecode(handle.read())
         else:
