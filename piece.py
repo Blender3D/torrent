@@ -1,96 +1,139 @@
+import os
+import errno
 import hashlib
-import mmap
 
-class PiecedFileSystem(object):
-    def __init__(self):
-        self.files = l
+from utils import ceil_div, create_and_open
 
 class PiecedFile(object):
-    def __init__(self, handle, size, pieces):
-        if isinstance(handle, basestring):
-            try:
-                self.handle = open(handle, 'r+')
-            except IOError:
-                open(handle, 'w').close()
-            finally:
-                self.handle = open(handle, 'r+')
-        else:
-            self.handle = handle
-
+    def __init__(self, handle, size):
+        self.handle = handle
         self.size = size
-        self.pieces = pieces
-        self.piece_size = pieces[0].size
 
-        self.mmap = mmap.mmap(self.handle.fileno(), size)
+class PiecedFileSystem(object):
+    def __init__(self, files, block_size, block_hashes):
+        self.files = []
+        self.size = 0
 
-    def has_piece(self, index):
-        return self.pieces[index].completed
+        for file in files:
+            self.size += file.size
+            self.files.append(file)
 
-    def verify(self, lazy=True):
-        for piece in self.pieces:
-            if lazy and piece.complete:
-                continue
+        self.block_size = block_size
 
-            piece.complete = piece.verify(self.read_piece(piece.index))
+        self.num_blocks = ceil_div(self.size, block_size)
+        self.last_block_size = self.size - self.block_size * self.num_blocks
 
-        return all(piece.complete for piece in self.pieces)
+        self.block_hashes = block_hashes
 
-    def read_piece(self, index, offset=0, length=None):
-        piece = self.pieces[index]
-        length = length or piece.size
-        start = index * self.piece_size + offset
+    @classmethod
+    def from_torrent(cls, torrent):
+        files = []
+        hashes = list(torrent.piece_hashes)
+        block_size = torrent.meta['info']['piece length']
 
-        return self.mmap[start:start + length]
+        if 'length' in torrent.meta['info']:
+            path = torrent.meta['info']['name']
+            size = torrent.meta['info']['length']
+            handle = create_and_open(path, 'r+b')
+            handle.truncate(size)
+
+            files.append(PiecedFile(handle, size))
+        else:
+            base_path = torrent.meta['info']['name']
+
+            for info in torrent.meta['info']['files']:
+                folders = [base_path] + info['path'][:-1]
+                filename = info['path'][-1]
+                path = os.path.join(*folders)
+
+                try:
+                    os.makedirs(path)
+                except OSError as e:
+                    if e.errno == errno.EEXIST and os.path.isdir(path):
+                        pass
+                    else:
+                        raise
+
+                path = os.path.join(*(folders + [filename]))
+                size = info['length']
+                handle = create_and_open(path, 'r+b')
+                handle.truncate(size)
+
+                files.append(PiecedFile(handle, size))
+
+        return cls(files, block_size, hashes)
+
+    def get_file_by_block(self, index):
+        offset = 0
+        block_offset = index * self.block_size
+
+        for file in self.files:
+            if offset <= block_offset < offset + file.size:
+                return file
+            else:
+                offset += file.size
+
+        raise ValueError('Invalid block index')
+
+    def read_piece(self, index, offset, length):
+        if offset >= self.block_size:
+            raise ValueError('Offset must be smaller than the block size')
+
+        if offset + length > self.block_size:
+            raise ValueError('Cannot read across blocks')
+
+        if index == self.num_blocks - 1 and offset + length > self.last_block_size:
+            raise ValueError('Cannot read past end of last block')
+
+        file = self.get_file_by_block(index)
+        file.handle.seek(offset)
+
+        return file.handle.read(length)
 
     def write_piece(self, index, offset, data):
-        piece = self.pieces[index]
-        
-        if piece.complete:
-            return
+        if offset >= self.block_size:
+            raise ValueError('Offset must be smaller than the block size')
 
-        start = index * self.piece_size + offset
+        if offset + len(data) > self.block_size:
+            raise ValueError('Cannot write across blocks')
 
-        self.mmap[start:start + len(data)] = data
+        if index == self.num_blocks - 1 and offset + length > self.last_block_size:
+            raise ValueError('Cannot write past end of last block')
 
-        if piece.verify(self.read_piece(index)):
-            piece.complete = True
-            self.mmap.flush()
-            self.handle.flush()
+        file = self.get_file_by_block(index)
+        file.handle.seek(offset)
+        file.handle.write(data)
 
-            print self.percent_done()
+    def read_block(self, index):
+        if index == self.num_blocks - 1:
+            return self.read_piece(index, 0, self.last_block_size)
+        else:
+            return self.read_piece(index, 0, self.block_size)
 
-            return True
+    def write_block(self, index, data):
+        if len(data) != self.block_size or (index == self.num_blocks - 1 and len(data) != self.last_block_size):
+            raise ValueError('Data must fill an entire block')
 
-    def percent_done(self):
-        return '{:0.2f}%'.format(100 * float(sum(piece.complete for piece in self.pieces)) / len(self.pieces))
+        return self.write_piece(index, 0, data)
 
-    def progress(self):
-        return ''.join(str(int(piece.complete)) for piece in self.pieces)
+    def verify_block(self, index):
+        if not (0 <= index < self.num_blocks):
+            raise ValueError('Invalid block index')
 
-    def to_bitfield(self):
-        return {piece.index: piece.complete for piece in self.pieces}
+        return hashlib.sha1(self.read_block(index)).digest() == self.block_hashes[index]
 
-    def close(self):
-        self.mmap.close()
-        self.handle.close()
+    def verify(self):
+        return all(self.verify_block(index) for index in range(self.num_blocks))
 
-class Piece(object):
-    def __init__(self, size, hash, index):
-        self.hash = hash
-        self.size = size
-        self.index = index
-        self.complete = False
+    def piece_chart(self):
+        return ''.join('*' if self.verify_block(index) else '.' for index in range(self.num_blocks))
 
-    def verify(self, data):
-        return len(data) == self.size and hashlib.sha1(data).digest() == self.hash
-
-    def __repr__(self):
-        return '<Piece {0} {1}>'.format(self.index, self.hash.encode('hex'))
+    def __str__(self):
+        return '<PiecedFileSystem ' + self.piece_chart() + '>'
 
 if __name__ == '__main__':
     from torrent import Torrent
 
     torrent = Torrent('ubuntu-13.04-desktop-amd64.iso.torrent')
-    f = PiecedFile('ubuntu-13.04-desktop-amd64.iso', torrent.size, torrent.pieces)
-    print f.verify()
-    print f.progress()
+    f = PiecedFileSystem.from_torrent(torrent)
+    print f

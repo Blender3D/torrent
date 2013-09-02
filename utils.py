@@ -1,6 +1,7 @@
 import os
 import struct
 import itertools
+import operator
 
 peer_address_struct = struct.Struct('!BBBBH')
 
@@ -18,3 +19,24 @@ def grouper(n, iterable, fillvalue=None):
     args = [iter(iterable)] * n
 
     return itertools.izip_longest(fillvalue=fillvalue, *args)
+
+def accumulate(iterable, func=operator.add):
+    it = iter(iterable)
+    total = next(it)
+
+    yield total
+
+    for element in it:
+        total = func(total, element)
+        yield total
+
+def ceil_div(a, b):
+    return a // b + int(bool(a % b))
+
+def create_and_open(name, mode='r'):
+    try:
+        return open(name, mode)
+    except IOError:
+        open(name, 'w').close()
+    finally:
+        return open(name, mode)

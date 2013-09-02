@@ -5,7 +5,7 @@ import random
 
 from torrent import Torrent
 from tracker import Tracker
-from piece import PiecedFile
+from piece import PiecedFileSystem
 from protocol import Messages, KeepAlive, Choke, Unchoke, Interested, NotInterested, Have, Bitfield, Request, Piece, Cancel, Port
 
 from tornado.ioloop import IOLoop
@@ -151,9 +151,8 @@ class Server(TCPServer):
         self.torrent = torrent
         self.clients = []
         
-        self.file = PiecedFile('ubuntu-13.04-desktop-amd64.iso', self.torrent.size, self.torrent.pieces)
-        self.file.verify()
-        print self.file.progress()
+        self.filesystem = PiecedFileSystem.from_torrent(torrent)
+        print self.filesystem
 
         self.peer_id = peer_id()
 

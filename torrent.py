@@ -1,10 +1,7 @@
 import hashlib
 import bencode
 
-from itertools import islice
-
 from tracker import Tracker
-from piece import Piece
 from utils import grouper
 
 class Torrent(object):
@@ -25,11 +22,9 @@ class Torrent(object):
         else:
             self.meta = {}
 
-        self.uploaded = 100000
+        self.uploaded = 1000000
         self.downloaded = 1000000
-        self.remaining = 7000000
-
-        self.pieces = list(self._pieces())
+        self.remaining = 10000000
 
     def bencode(self):
         return bencode.bencode(self.meta)
@@ -64,24 +59,8 @@ class Torrent(object):
         return self.trackers[0]
 
     @property
-    def size(self):
-        return self.meta['info']['length']
-
-    def _pieces(self):
-        torrent_length = self.meta['info']['length']
-        piece_length = self.meta['info']['piece length']
-
-        num_pieces, incomplete_piece_length = divmod(torrent_length, piece_length)
+    def piece_hashes(self):
         hashes = grouper(20, self.meta['info']['pieces'])
 
         for index, hash in enumerate(hashes):
-            length = incomplete_piece_length if index == num_pieces else piece_length
-
-            yield Piece(length, ''.join(hash), index)
-
-
-if __name__ == '__main__':
-    torrent = Torrent('ubuntu-13.04-desktop-amd64.iso.torrent')
-
-    for piece in torrent.pieces:
-        print piece
+            yield ''.join(hash)
