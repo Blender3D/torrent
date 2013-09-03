@@ -1,8 +1,8 @@
 import hashlib
-import bencode
 
-from tracker import HTTPTracker
-from utils import grouper
+from torrent.bencode import bencode, bdecode
+from torrent.tracker import Tracker
+from torrent.utils import grouper
 
 class Torrent(object):
     def __init__(self, handle=None):
@@ -48,9 +48,8 @@ class Torrent(object):
 
         for tier, urls in enumerate(trackers):
             for url in urls:
-                if url.startswith('http'):
-                    tracker = HTTPTracker(url, torrent=self, tier=tier)
-                    result.append(tracker)
+                tracker = Tracker(url, torrent=self, tier=tier)
+                result.append(tracker)
 
         return result
 

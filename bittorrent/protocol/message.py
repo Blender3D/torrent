@@ -1,4 +1,6 @@
 import inspect
+
+from bittorrent.protocol.common import Message
 from struct import Struct
 
 class Message(object):
