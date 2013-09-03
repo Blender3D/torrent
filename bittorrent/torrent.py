@@ -1,8 +1,8 @@
 import hashlib
 
-from torrent.bencode import bencode, bdecode
-from torrent.tracker import Tracker
-from torrent.utils import grouper
+from bittorrent import bencode
+from bittorrent.tracker import Tracker
+from bittorrent.utils import grouper
 
 class Torrent(object):
     def __init__(self, handle=None):
@@ -11,14 +11,14 @@ class Torrent(object):
         elif isinstance(handle, basestring):
             try:
                 with open(handle, 'rb') as input_file:
-                    self.meta = bencode.bdecode(input_file.read())
+                    self.meta = bencode.decode(input_file.read())
             except IOError:
                 try:
-                    self.meta = bencode.bdecode(handle)
+                    self.meta = bencode.decode(handle)
                 except ValueError:
                     raise TypeError('handle must be a file, dict, path, or bencoded string. Got: {0}'.format(type(handle)))
         elif hasattr(handle, 'read'):
-            self.meta = bencode.bdecode(handle.read())
+            self.meta = bencode.decode(handle.read())
         else:
             self.meta = {}
 
@@ -27,14 +27,14 @@ class Torrent(object):
         self.remaining = 10000000
 
     def bencode(self):
-        return bencode.bencode(self.meta)
+        return bencode.encode(self.meta)
 
     def save(self, filename):
         with open(filename, 'wb') as handle:
             handle.write(self.bencode())
 
     def info_hash(self, hex=False):
-        hash = hashlib.sha1(bencode.bencode(self.meta['info']))
+        hash = hashlib.sha1(bencode.encode(self.meta['info']))
 
         if hex:
             return hash.hexdigest()

@@ -1,9 +1,12 @@
 import unittest
 import struct
 
-from bittorrent import bencode
+from tornado.testing import AsyncTestCase, gen_test
+
+from bittorrent import bencode, utils
+from bittorrent.torrent import Torrent
 from bittorrent.protocol.message import KeepAlive, Choke, Have, Bitfield
-from bittorrent.tracker import Tracker, HTTPTracker, UDPTracker
+from bittorrent.tracker import Tracker, HTTPTracker, UDPTracker, TrackerResponse
 
 class TestBencode(unittest.TestCase):
     def test_string(self):
@@ -65,10 +68,9 @@ class TestBdecode(unittest.TestCase):
         self.assertRaises(ValueError, bencode.decode, 'i-0e')
         self.assertRaises(ValueError, bencode.decode, '')
 
-class TestTorrentMetadataReader(unittest.TestCase):
+class TestTorrentReader(unittest.TestCase):
     def test_read(self):
-        with open('torrents/ubuntu-13.04-desktop-amd64.iso.torrent', 'rb') as handle:
-            metadata = bencode.decode(handle.read())
+        Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
 
 class TestProtocolMessages(unittest.TestCase):
     def test_keep_alive(self):
@@ -96,12 +98,22 @@ class TestProtocolMessages(unittest.TestCase):
             3: True
         })
 
-class TestTracker(unittest.TestCase):
+class TestTracker(AsyncTestCase):
     def test_autodetect(self):
         self.assertIsInstance(Tracker('udp://tracker.openbittorrent.com:80/announce', None), UDPTracker)
         self.assertIsInstance(Tracker('http://torrent.ubuntu.com:6969/announce', None), HTTPTracker)
+
         self.assertRaises(ValueError, Tracker, 'gopher://tracker.openbittorrent.com:80/announce', None)
         self.assertRaises(ValueError, Tracker, 'tracker.openbittorrent.com:80/announce', None)
+
+    @gen_test
+    def test_http(self):
+        torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
+        tracker = HTTPTracker('http://torrent.ubuntu.com:6969/announce', torrent)
+
+        response = yield tracker.announce(utils.peer_id(), 6881)
+
+        self.assertIsInstance(response, TrackerResponse)
 
 if __name__ == '__main__':
     unittest.main()

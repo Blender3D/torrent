@@ -1,19 +1,5 @@
-import urlparse
-
-from bittorrent.tracker.http import HTTPTracker
-from bittorrent.tracker.udp import UDPTracker
-
+from bittorrent import utils
 from bittorrent.peer import Peer
-
-def Tracker(url, torrent, tier=0):
-    o = urlparse.urlsplit(url)
-
-    if o.scheme == 'http':
-        return HTTPTracker(url, torrent, tier)
-    elif o.scheme == 'udp':
-        return UDPTracker(o.hostname, o.port, torrent, tier)
-    else:
-        raise ValueError('Unsupported tracker protocol: ' + o.scheme)
 
 class TrackerResponse(object):
     def __init__(self, data):
@@ -28,5 +14,5 @@ class TrackerResponse(object):
             for peer_dict in peers:
                 yield Peer(peer_dict['ip'], peer_dict['port'], peer_dict['peer_id'])
         else:
-            for index in range(0, len(peers), 6):
-                yield Peer(*utils.unpack_peer_address(peers[index:index + 6]))
+            for chunk in utils.grouper(6, peers):
+                yield Peer(*utils.unpack_peer_address(''.join(chunk)))

@@ -2,21 +2,23 @@ import urllib
 import struct
 
 from bittorrent import bencode
+from bittorrent.tracker import TrackerResponse
 
-from twisted.web.client import Agent, readBody
-from twisted.internet import defer, reactor
+from tornado.gen import coroutine, Return
+from tornado.httpclient import AsyncHTTPClient
+from tornado.httputil import url_concat
 
 class HTTPTracker(object):
     def __init__(self, url, torrent, tier=0):
         self.url = url
         self.tier = tier
         self.torrent = torrent
-        
-        self.agent = Agent(reactor)
 
-    @defer.inlineCallbacks
+        self.client = AsyncHTTPClient()
+
+    @coroutine
     def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
-        parameters = urllib.urlencode({
+        tracker_url = url_concat(self.url, {
             'info_hash': self.torrent.info_hash(),
             'peer_id': peer_id,
             'port': port,
@@ -28,8 +30,7 @@ class HTTPTracker(object):
             'compact': int(compact)
         })
 
-        response = yield self.agent.request('GET', self.url + '?' + parameters)
-        body = yield readBody(response)
-        result = TrackerResponse(bencode.decode(body))
+        response = yield self.client.fetch(tracker_url)
+        result = TrackerResponse(bencode.decode(response.body))
 
-        defer.returnValue(result)
+        raise Return(result)
