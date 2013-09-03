@@ -1,8 +1,7 @@
 import os
-import errno
 import hashlib
 
-from utils import ceil_div, create_and_open
+from utils import ceil_div, create_and_open, mkdirs
 
 class PiecedFile(object):
     def __init__(self, handle, size):
@@ -24,9 +23,10 @@ class PiecedFileSystem(object):
         self.last_block_size = self.size - self.block_size * self.num_blocks
 
         self.block_hashes = block_hashes
+        self.blocks = [None] * self.num_blocks
 
     @classmethod
-    def from_torrent(cls, torrent):
+    def from_torrent(cls, torrent, base_path=None):
         files = []
         hashes = list(torrent.piece_hashes)
         block_size = torrent.meta['info']['piece length']
@@ -34,29 +34,28 @@ class PiecedFileSystem(object):
         if 'length' in torrent.meta['info']:
             path = torrent.meta['info']['name']
             size = torrent.meta['info']['length']
+
+            if base_path is not None:
+                mkdirs(base_path)
+                path = os.path.join(base_path, path)
+
             handle = create_and_open(path, 'r+b')
             handle.truncate(size)
 
             files.append(PiecedFile(handle, size))
         else:
-            base_path = torrent.meta['info']['name']
+            if base_path is not None:
+                base_path = torrent.meta['info']['name']
 
             for info in torrent.meta['info']['files']:
                 folders = [base_path] + info['path'][:-1]
                 filename = info['path'][-1]
-                path = os.path.join(*folders)
+                directory = os.path.join(*folders)
 
-                try:
-                    os.makedirs(path)
-                except OSError as e:
-                    if e.errno == errno.EEXIST and os.path.isdir(path):
-                        pass
-                    else:
-                        raise
+                mkdirs(directory)
 
-                path = os.path.join(*(folders + [filename]))
                 size = info['length']
-                handle = create_and_open(path, 'r+b')
+                handle = create_and_open(os.path.join(directory, filename), 'r+b')
                 handle.truncate(size)
 
                 files.append(PiecedFile(handle, size))
@@ -104,6 +103,8 @@ class PiecedFileSystem(object):
         file.handle.seek(offset)
         file.handle.write(data)
 
+        self.verify_block(index, force=True)
+
     def read_block(self, index):
         if index == self.num_blocks - 1:
             return self.read_piece(index, 0, self.last_block_size)
@@ -114,16 +115,26 @@ class PiecedFileSystem(object):
         if len(data) != self.block_size or (index == self.num_blocks - 1 and len(data) != self.last_block_size):
             raise ValueError('Data must fill an entire block')
 
-        return self.write_piece(index, 0, data)
+        self.write_piece(index, 0, data)
+        self.verify_block(index, force=True)
 
-    def verify_block(self, index):
+    def verify_block(self, index, force=False):
         if not (0 <= index < self.num_blocks):
             raise ValueError('Invalid block index')
 
-        return hashlib.sha1(self.read_block(index)).digest() == self.block_hashes[index]
+        if not force and self.blocks[index] is not None:
+            return self.blocks[index]
+
+        verified = hashlib.sha1(self.read_block(index)).digest() == self.block_hashes[index]
+        self.blocks[index] = verified
+
+        return verified
 
     def verify(self):
         return all(self.verify_block(index) for index in range(self.num_blocks))
+
+    def to_bitfield(self):
+        return {index: self.verify_block(index) for index in range(self.num_blocks)}
 
     def piece_chart(self):
         return ''.join('*' if self.verify_block(index) else '.' for index in range(self.num_blocks))

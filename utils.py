@@ -2,6 +2,11 @@ import os
 import struct
 import itertools
 import operator
+import errno
+import time
+import logging
+
+from tornado.ioloop import IOLoop
 
 peer_address_struct = struct.Struct('!BBBBH')
 
@@ -40,3 +45,12 @@ def create_and_open(name, mode='r'):
         open(name, 'w').close()
     finally:
         return open(name, mode)
+
+def mkdirs(path):
+    try:
+        os.makedirs(path)
+    except OSError as e:
+        if e.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
