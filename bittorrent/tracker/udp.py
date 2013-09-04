@@ -2,8 +2,11 @@ import socket
 import struct
 import random
 
-from tornado.gen import coroutine, Return
+from datetime import datetime, timedelta
+
+from tornado.gen import coroutine, Return, Task
 from tornado.concurrent import Future
+from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 
 from bittorrent import bencode
@@ -25,61 +28,63 @@ class UDPTracker(object):
         self.tier = tier
 
         self.connection_id = None
-        self.sent_count = {}
+        self.connection_id_age = datetime.min
+        self.requesting_connection_id = False
 
-        # TODO: Make this non-blocking
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.pending_retries = {}
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.stream = IOStream(sock)
+        self.stream.connect((self.host, self.port))
+
+    @coroutine
+    def receive_response(self):
+        data = yield Task(self.stream.read_bytes, 4)
+
+        action, transaction_id, connection_id = struct.unpack('!IIQ', data)
+        result = (action, transaction_id, connection_id)
+
+        if action == 0:
+            raise Return(result)
 
     @coroutine
     def request_connection_id(self):
-        connection_id = 0x41727101980  # Magic number
-        transaction_id = random.getrandbits(32)
-        action = 0 # Connect
+        self.connection_id = 0x41727101980
+        yield self.send_request(0)
+        response = yield Task(self.stream.read_bytes, 4)
 
-        data = struct.pack('!QII', connection_id, transaction_id, action)
-        self.socket.sendto(data, (self.host, self.port))
-
-        action2, transaction_id2, connection_id2 = struct.unpack('!IIQ', socket.recv(16))
-
-        if transaction_id2 != transaction_id:
-            raise ValueError('Transaction IDs do not match')
-
-        if action2 != action:
-            raise ValueError('Action is not CONNECT')
+        print '\n\n', repr(response), '\n\n'
 
     @coroutine
-    def send_request(self, structure, *args):
-        connection_id = 0x41727101980
-        transaction_id = random.getrandbits(32)
+    def send_request(self, action, structure='', transaction_id=None, arguments=None, attempt=1):
+        if action != 0 and datetime.now() - self.connection_id_age > timedelta(minutes=1):
+            self.requesting_connection_id = True
+            yield self.request_connection_id()
 
-        data = struct.pack('!QI', connection_id, transaction_id)
-        data += struct.pack(structure, *args)
+        transaction_id = transaction_id or random.getrandbits(32)
+        data = struct.pack('!QII', self.connection_id, action, transaction_id)
 
-        if transaction_id in self.sent_count:
-            self.sent_count += 1
+        if structure and arguments:
+            data += struct.pack(structure, *arguments)
 
-        response = self.socket
+        if transaction_id in self.pending_retries:
+            self.pending_retries[transaction_id] += 1
+            count = self.sent_requests[transaction_id]
 
+            if count > 8:
+                raise ValueError('Request was retried 8 times with no response')
+
+            retry_request = lambda: self.send_request(action, structure, transaction_id, arguments, attempt=attempt + 1)
+            IOLoop.instance().add_timeout(timedelta(seconds=15 * 2 ** count), retry_request)
+        else:
+            yield Task(self.stream.write, data)
+
+    @coroutine
     def announce(self, peer_id, port, event='started', num_wanted=10):
-        transaction_id = random.getrandbits(32)
+        yield self.request_connection_id()
 
-        data = struct.pack('!QII', 0x41727101980, 0, transaction_id)
-        self.socket.sendto(data, (self.host, self.port))
-
-        action, transaction_id2, connection_id = struct.unpack('!IIQ', self.socket.recv(16))
-
-        if transaction_id2 != transaction_id:
-            raise ValueError('Transaction IDs do not match')
-
-        if action != 0:
-            raise ValueError('Action is not CONNECT')
-
-        transaction_id = random.getrandbits(32)
-
-        data = struct.pack('!QII20s20sQQQIIIiH',
-            connection_id,
-            1, # ANNOUNCE
-            random.getrandbits(32),
+        return
+        yield self.send_request(1, '!QII20s20sQQQIIIiH', [
             self.torrent.info_hash(),
             peer_id,
             self.torrent.downloaded,
@@ -90,14 +95,4 @@ class UDPTracker(object):
             0,
             -1,
             port
-        )
-
-        future = Future()
-        future.set_result(False)
-
-        return future
-
-
-
-    def datagramReceived(self, data):
-        print 'Received', repr(data)
+        ])
