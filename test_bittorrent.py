@@ -106,10 +106,20 @@ class TestTracker(AsyncTestCase):
         self.assertRaises(ValueError, Tracker, 'gopher://tracker.openbittorrent.com:80/announce', None)
         self.assertRaises(ValueError, Tracker, 'tracker.openbittorrent.com:80/announce', None)
 
+    @unittest.skip("disabled for now")
     @gen_test
     def test_http(self):
         torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
-        tracker = HTTPTracker('http://torrent.ubuntu.com:6969/announce', torrent)
+        tracker = Tracker('http://torrent.ubuntu.com:6969/announce', torrent)
+
+        response = yield tracker.announce(utils.peer_id(), 6881)
+
+        self.assertIsInstance(response, TrackerResponse)
+
+    @gen_test
+    def test_udp(self):
+        torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
+        tracker = Tracker('udp://tracker.openbittorrent.com:80/announce', torrent)
 
         response = yield tracker.announce(utils.peer_id(), 6881)
 

@@ -1,31 +1,21 @@
+import socket
 import struct
 import random
 
+from tornado.gen import coroutine, Return
+from tornado.concurrent import Future
+from tornado.iostream import IOStream
+
 from bittorrent import bencode
-
-from twisted.internet import defer, reactor
-from twisted.internet.protocol import DatagramProtocol
-
-class UDPTrackerProtocol(DatagramProtocol):
-    def __init__(self, host, port):
-        self.host = host
-        self.port = port
-
-    def startProtocol(self):
-        self.transport.connect(self.host, self.port)
-        self.sendConnect()
-
-    def sendConnect(self):
-        self.transaction_id = random.getrandbits(32)
-
-        data = struct.pack('!QII', 0x41727101980, 0, self.transaction_id)
-        self.transport.write(data)
-
-    def datagramReceived(self, data):
-        print 'Received', repr(data)
+from bittorrent.udpstream import UDPStream
 
 class UDPTracker(object):
-    protocol = UDPTrackerProtocol
+    events = {
+        'none': 0,
+        'completed': 1,
+        'started': 2,
+        'stopped': 3
+    }
 
     def __init__(self, host, port, torrent, tier=0):
         self.host = host
@@ -34,30 +24,80 @@ class UDPTracker(object):
         self.torrent = torrent
         self.tier = tier
 
-    @defer.inlineCallbacks
+        self.connection_id = None
+        self.sent_count = {}
+
+        # TODO: Make this non-blocking
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    @coroutine
+    def request_connection_id(self):
+        connection_id = 0x41727101980  # Magic number
+        transaction_id = random.getrandbits(32)
+        action = 0 # Connect
+
+        data = struct.pack('!QII', connection_id, transaction_id, action)
+        self.socket.sendto(data, (self.host, self.port))
+
+        action2, transaction_id2, connection_id2 = struct.unpack('!IIQ', socket.recv(16))
+
+        if transaction_id2 != transaction_id:
+            raise ValueError('Transaction IDs do not match')
+
+        if action2 != action:
+            raise ValueError('Action is not CONNECT')
+
+    @coroutine
+    def send_request(self, structure, *args):
+        connection_id = 0x41727101980
+        transaction_id = random.getrandbits(32)
+
+        data = struct.pack('!QI', connection_id, transaction_id)
+        data += struct.pack(structure, *args)
+
+        if transaction_id in self.sent_count:
+            self.sent_count += 1
+
+        response = self.socket
+
     def announce(self, peer_id, port, event='started', num_wanted=10):
-        self.host = yield reactor.resolve(self.host)
+        transaction_id = random.getrandbits(32)
 
-        protocol = self.protocol(self.host, self.port)
-        protocol.factory = self
+        data = struct.pack('!QII', 0x41727101980, 0, transaction_id)
+        self.socket.sendto(data, (self.host, self.port))
 
-        reactor.listenUDP(0, protocol)
+        action, transaction_id2, connection_id = struct.unpack('!IIQ', self.socket.recv(16))
 
-if __name__ == '__main__':
-    def success(*args, **kwargs):
-        print args, kwargs
+        if transaction_id2 != transaction_id:
+            raise ValueError('Transaction IDs do not match')
 
-    def failure(failure):
-        failure.printTraceback()
+        if action != 0:
+            raise ValueError('Action is not CONNECT')
 
-    from torrent.torrent import Torrent
-    from torrent.utils import peer_id
+        transaction_id = random.getrandbits(32)
 
-    torrent = Torrent('[kickass.to]pixies.where.is.my.mind.torrent')
-    tracker = torrent.tracker
+        data = struct.pack('!QII20s20sQQQIIIiH',
+            connection_id,
+            1, # ANNOUNCE
+            random.getrandbits(32),
+            self.torrent.info_hash(),
+            peer_id,
+            self.torrent.downloaded,
+            self.torrent.remaining,
+            self.torrent.uploaded,
+            self.events[event],
+            0,
+            0,
+            -1,
+            port
+        )
 
-    d = tracker.announce(peer_id(), 6881)
-    d.addCallbacks(success, failure)
-    d.addBoth(lambda reason: reactor.stop())
+        future = Future()
+        future.set_result(False)
 
-    reactor.run()
+        return future
+
+
+
+    def datagramReceived(self, data):
+        print 'Received', repr(data)
