@@ -106,7 +106,6 @@ class TestTracker(AsyncTestCase):
         self.assertRaises(ValueError, Tracker, 'gopher://tracker.openbittorrent.com:80/announce', None)
         self.assertRaises(ValueError, Tracker, 'tracker.openbittorrent.com:80/announce', None)
 
-    @unittest.skip("disabled for now")
     @gen_test
     def test_http(self):
         torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')

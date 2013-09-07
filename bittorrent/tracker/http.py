@@ -1,7 +1,8 @@
 import urllib
 import struct
 
-from bittorrent import bencode
+from bittorrent import bencode, utils
+from bittorrent.peer import Peer
 from bittorrent.tracker import TrackerResponse
 
 from tornado.gen import coroutine, Return
@@ -31,6 +32,19 @@ class HTTPTracker(object):
         })
 
         response = yield self.client.fetch(tracker_url)
-        result = TrackerResponse(bencode.decode(response.body))
+        decoded_body = bencode.decode(response.body)
+        peers = list(self.get_peers(decoded_body))
+        result = TrackerResponse(peers, decoded_body['interval'])
+
 
         raise Return(result)
+
+    def get_peers(self, data):
+        peers = data['peers']
+
+        if isinstance(peers, list):
+            for peer_dict in peers:
+                yield Peer(peer_dict['ip'], peer_dict['port'], peer_dict['peer_id'])
+        else:
+            for chunk in utils.grouper(6, peers):
+                yield Peer(*utils.unpack_peer_address(''.join(chunk)))
