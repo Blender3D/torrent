@@ -26,6 +26,8 @@ class Torrent(object):
         self.downloaded = 1000000
         self.remaining = 10000000
 
+        self.trackers = self._trackers()
+
     def bencode(self):
         return bencode.encode(self.meta)
 
@@ -41,8 +43,7 @@ class Torrent(object):
         else:
             return hash.digest()
 
-    @property
-    def trackers(self):
+    def _trackers(self):
         trackers = self.meta.get('announce-list', [[self.meta['announce']]])
         result = []
 

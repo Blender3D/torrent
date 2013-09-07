@@ -124,5 +124,16 @@ class TestTracker(AsyncTestCase):
 
         self.assertIsInstance(response, TrackerResponse)
 
+class TestClient(AsyncTestCase):
+    @gen_test
+    def test_http(self):
+        torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
+        tracker = Tracker('http://torrent.ubuntu.com:6969/announce', torrent)
+
+        response = yield tracker.announce(utils.peer_id(), 6881)
+
+        self.assertIsInstance(response, TrackerResponse)
+
+
 if __name__ == '__main__':
     unittest.main()

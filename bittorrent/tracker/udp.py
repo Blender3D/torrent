@@ -11,6 +11,7 @@ from tornado.ioloop import IOLoop
 from tornado.iostream import IOStream
 
 from bittorrent import bencode, utils
+from bittorrent.peer import Peer
 from bittorrent.tracker.common import TrackerResponse
 
 class UDPTracker(object):
@@ -41,7 +42,14 @@ class UDPTracker(object):
         self.stream.connect((self.host, self.port))
         self.stream.read_until_close(None, self.data_received)
 
+    @property
+    def url(self):
+        return 'udp://{self.host}:{self.port}'.format(self=self)
+
     def data_received(self, data):
+        if not data:
+            return
+
         action, transaction_id = struct.unpack('!II', data[:8])
 
         if transaction_id in self.pending_retries:
@@ -79,7 +87,7 @@ class UDPTracker(object):
         peers = []
 
         for chunk in utils.grouper(6, data[12:12 + 6 * num_peers]):
-            peers.append(utils.unpack_peer_address(''.join(chunk)))
+            peers.append(Peer(*utils.unpack_peer_address(''.join(chunk))))
 
         return TrackerResponse(peers, interval)
 
@@ -121,7 +129,10 @@ class UDPTracker(object):
         raise Return(result)
 
     @coroutine
-    def announce(self, peer_id, port, event='started', num_wanted=10):
+    def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
+        if compact:
+            print "UDP trackers are compact"
+
         response = yield self.send_request(1, '!20s20sQQQIIIiH', [
             self.torrent.info_hash(),
             peer_id,

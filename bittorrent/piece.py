@@ -39,8 +39,7 @@ class PiecedFileSystem(object):
                 mkdirs(base_path)
                 path = os.path.join(base_path, path)
 
-            handle = create_and_open(path, 'r+b')
-            handle.truncate(size)
+            handle = create_and_open(path, 'r+b', size=size)
 
             files.append(PiecedFile(handle, size))
         else:
@@ -55,8 +54,7 @@ class PiecedFileSystem(object):
                 mkdirs(directory)
 
                 size = info['length']
-                handle = create_and_open(os.path.join(directory, filename), 'r+b')
-                handle.truncate(size)
+                handle = create_and_open(os.path.join(directory, filename), 'r+b', size=size)
 
                 files.append(PiecedFile(handle, size))
 
@@ -141,6 +139,11 @@ class PiecedFileSystem(object):
 
     def __str__(self):
         return '<PiecedFileSystem ' + self.piece_chart() + '>'
+
+    def __del__(self):
+        for file in self.files:
+            file.handle.close()
+            del file
 
 if __name__ == '__main__':
     from torrent import Torrent
