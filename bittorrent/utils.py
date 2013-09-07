@@ -3,6 +3,8 @@ import struct
 import itertools
 import errno
 
+from functools import wraps
+
 peer_address_struct = struct.Struct('!BBBBH')
 
 def peer_id():
@@ -23,13 +25,22 @@ def grouper(n, iterable, fillvalue=None):
 def ceil_div(a, b):
     return a // b + int(bool(a % b))
 
+def fill(handle, size):
+    block_size = 2**18
+    zeroes = '\x00' * block_size
+
+    for chunk in range(0, size, block_size):
+        handle.write(zeroes)
+
+    handle.write('\x00' * (size % block_size))
+    handle.seek(0)
+
 def create_and_open(name, mode='r', size=None):
     try:
         return open(name, mode)
     except IOError:
-        with open(name, 'w') as handle:
-            if size is not None:
-                handle.truncate(size)
+        with open(name, 'wb') as handle:
+            fill(handle, size)
     finally:
         return open(name, mode)
 
@@ -41,3 +52,17 @@ def mkdirs(path):
             pass
         else:
             raise
+
+def gen_debuggable(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except Exception as e:
+            if isinstance(e, Return):
+                raise e
+            else:
+                import traceback
+                traceback.print_exc()
+
+    return wrapper

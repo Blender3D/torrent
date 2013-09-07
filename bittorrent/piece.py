@@ -66,6 +66,8 @@ class PiecedFileSystem(object):
 
         for file in self.files:
             if offset <= block_offset < offset + file.size:
+                file.handle.seek(block_offset - offset)
+
                 return file
             else:
                 offset += file.size
@@ -83,7 +85,7 @@ class PiecedFileSystem(object):
             raise ValueError('Cannot read past end of last block')
 
         file = self.get_file_by_block(index)
-        file.handle.seek(offset)
+        file.handle.seek(offset, 1)
 
         return file.handle.read(length)
 
@@ -98,7 +100,7 @@ class PiecedFileSystem(object):
             raise ValueError('Cannot write past end of last block')
 
         file = self.get_file_by_block(index)
-        file.handle.seek(offset)
+        file.handle.seek(offset, 1)
         file.handle.write(data)
 
         self.verify_block(index, force=True)
@@ -135,7 +137,20 @@ class PiecedFileSystem(object):
         return {index: self.verify_block(index) for index in range(self.num_blocks)}
 
     def piece_chart(self):
-        return ''.join('*' if self.verify_block(index) else '.' for index in range(self.num_blocks))
+        result = ''
+
+        for index in range(self.num_blocks):
+            data = self.read_block(index)
+            hash = hashlib.sha1(data).digest()
+
+            if hash == self.block_hashes[index]:
+                result += '*'
+            elif data.strip('\x00') != '':
+                result += 'o'
+            else:
+                result += '.'
+
+        return result
 
     def __str__(self):
         return '<PiecedFileSystem ' + self.piece_chart() + '>'

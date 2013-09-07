@@ -92,6 +92,7 @@ class UDPTracker(object):
         return TrackerResponse(peers, interval)
 
     @coroutine
+    @utils.gen_debuggable
     def send_request(self, action, structure='', arguments=None, transaction_id=None, attempt=1):
         if action != 0 and datetime.now() - self.connection_id_age > timedelta(minutes=1):
             self.requesting_connection_id = True
@@ -129,6 +130,7 @@ class UDPTracker(object):
         raise Return(result)
 
     @coroutine
+    @utils.gen_debuggable
     def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
         if compact:
             print "UDP trackers are compact"

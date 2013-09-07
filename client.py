@@ -16,7 +16,7 @@ from tornado.tcpserver import TCPServer
 from tornado.log import enable_pretty_logging
 from tornado.gen import coroutine, Task, Return, engine
 
-from bittorrent.utils import peer_id
+from bittorrent.utils import peer_id, gen_debuggable
 
 class Client(object):
     protocol = 'BitTorrent protocol'
@@ -42,6 +42,7 @@ class Client(object):
         self.handshake()
 
     @coroutine
+    @gen_debuggable
     def get_message(self):
         bytes = yield self.read_bytes(4)
         length = struct.unpack('!I', bytes)[0]
@@ -60,6 +61,7 @@ class Client(object):
         raise Return(result)
 
     @coroutine
+    @gen_debuggable
     def message_loop(self):
         logging.info('Starting message loop')
         self.send_message(Bitfield(self.server.filesystem.to_bitfield()))
@@ -123,6 +125,7 @@ class Client(object):
         logging.info('Sent a %s', message.__class__.__name__)
 
     @coroutine
+    @gen_debuggable
     def handshake(self):
         message = chr(len(self.protocol))
         message += self.protocol
@@ -169,6 +172,7 @@ class Server(TCPServer):
         self.peer_id = peer_id()
 
     @coroutine
+    @gen_debuggable
     def start(self, num_processes=1):
         TCPServer.start(self, num_processes)
 
@@ -179,6 +183,7 @@ class Server(TCPServer):
             self.connect(peer)
 
     @coroutine
+    @gen_debuggable
     def get_peers(self):
         for tracker in self.torrent.trackers:
             try:
@@ -204,6 +209,7 @@ class Server(TCPServer):
         self.clients.append(Client(stream, peer, self))
 
     @coroutine
+    @gen_debuggable
     def disconnected(self, client):
         self.clients.remove(client)
         
@@ -231,7 +237,7 @@ if __name__ == '__main__':
     enable_pretty_logging()
     #logging.getLogger().setLevel(logging.ERROR)
 
-    torrent = Torrent('torrents/[kickass.to]pixies.where.is.my.mind.torrent')
+    torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
     
     server = Server(torrent)
     server.listen(6881)
