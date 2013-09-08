@@ -10,12 +10,12 @@ class Torrent(object):
             self.meta = handle
         elif isinstance(handle, basestring):
             try:
-                with open(handle, 'rb') as input_file:
-                    self.meta = bencode.decode(input_file.read())
-            except IOError:
+                self.meta = bencode.decode(handle)
+            except ValueError:
                 try:
-                    self.meta = bencode.decode(handle)
-                except ValueError:
+                    with open(handle, 'rb') as input_file:
+                        self.meta = bencode.decode(input_file.read())
+                except IOError:
                     raise TypeError('handle must be a file, dict, path, or bencoded string. Got: {0}'.format(type(handle)))
         elif hasattr(handle, 'read'):
             self.meta = bencode.decode(handle.read())

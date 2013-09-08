@@ -10,7 +10,7 @@ from bittorrent.protocol.message import (Messages, KeepAlive, Choke,
                                          Unchoke, Interested, NotInterested,
                                          Have, Bitfield, Request, Piece, Cancel, Port)
 
-from tornado.ioloop import IOLoop
+from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado.iostream import IOStream
 from tornado.tcpserver import TCPServer
 from tornado.log import enable_pretty_logging
@@ -60,9 +60,46 @@ class Client(object):
 
         raise Return(result)
 
+    @gen_debuggable
+    def desired_pieces(self):
+        logging.info('Let\'s see...')
+        try:
+            result = [p for p in self.peer_pieces if not self.server.filesystem.blocks[p]]
+        except:
+            print '**********************'
+            import traceback
+            print traceback.print_exc()
+
+            print p, len(self.server.filesystem.blocks)
+
+        logging.info('I want %s', repr(result))
+
+        return result
+
+    def maybe_express_interest(self):
+        logging.info('Am I interested?')
+
+        if self.am_interested:
+            logging.info('I am already interested')
+            return
+
+        if self.desired_pieces():
+            logging.info('Peer has something good. I am.')
+            self.am_interested = True
+            self.send_message(Interested())
+        else:
+            logging.info('Nope, peer\'s got nothin\': %s', repr(self.desired_pieces()))
+            self.am_interested = False
+            self.send_message(NotInterested())
+
+    def send_keepalive(self):
+        self.send_message(KeepAlive())
+
     @coroutine
     @gen_debuggable
     def message_loop(self):
+        PeriodicCallback(self.send_keepalive, 30 * 1000).start()
+
         logging.info('Starting message loop')
         self.send_message(Bitfield(self.server.filesystem.to_bitfield()))
 
@@ -77,30 +114,22 @@ class Client(object):
             logging.info('Client sent us a %s', message.__class__.__name__)
 
             if isinstance(message, Unchoke):
-                self.send_message(Unchoke())
-                desired_pieces = [p for p in self.peer_pieces if p]
+                self.maybe_express_interest()
+                piece = random.choice(self.desired_pieces())
 
-                if not desired_pieces:
-                    self.send_message(NotInterested())
-                else:
-                    while True:
-                        piece = random.choice(desired_pieces)
-
-                        if self.peer_pieces[piece] and not self.server.filesystem.blocks[piece]:
-                            break
-
-                    for start in range(0, self.server.filesystem.block_size, 2**14):
-                        self.send_message(Request(piece, start, 2**14))
+                for start in range(0, self.server.filesystem.block_size, 2**14):
+                    self.send_message(Request(piece, start, 2**14))
             elif isinstance(message, Bitfield):
                 self.peer_pieces = message.bitfield
+                self.maybe_express_interest()
             elif isinstance(message, Have):
                 self.peer_pieces[message.piece] = True
+                self.maybe_express_interest()
             elif isinstance(message, Piece):
                 logging.info('Piece info: %d, %d, %d', message.index, message.begin, len(message.block))
                 #self.peer.add_data_sample(len(message.block))
                 self.server.filesystem.write_piece(message.index, message.begin, message.block)
 
-                continue
                 if self.server.filesystem.verify_block(message.index):
                     logging.info('Got a complete piece!')
                     print self.filesystem
@@ -112,6 +141,23 @@ class Client(object):
 
                 data = self.server.filesystem.read_piece(message.index, message.begin, message.length)
                 self.send_message(Piece(message.index, message.begin, data))
+            else:
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
+                logging.info('Invalid message received!!')
 
     def read_bytes(self, bytes):
         return Task(self.stream.read_bytes, bytes)
@@ -235,12 +281,13 @@ class Server(TCPServer):
 
 if __name__ == '__main__':
     enable_pretty_logging()
+    IOLoop.instance().set_blocking_log_threshold(0.5)
     #logging.getLogger().setLevel(logging.ERROR)
 
-    torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
+    torrent = Torrent('torrents/[kickass.to]pixies.where.is.my.mind.torrent')
     
     server = Server(torrent)
-    server.listen(6881)
+    server.listen(6882)
     server.start()
 
     IOLoop.instance().start()

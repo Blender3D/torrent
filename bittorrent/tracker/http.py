@@ -36,7 +36,6 @@ class HTTPTracker(object):
         peers = list(self.get_peers(decoded_body))
         result = TrackerResponse(peers, decoded_body['interval'])
 
-
         raise Return(result)
 
     def get_peers(self, data):

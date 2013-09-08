@@ -29,10 +29,11 @@ def fill(handle, size):
     block_size = 2**18
     zeroes = '\x00' * block_size
 
-    for chunk in range(0, size, block_size):
+    for chunk in range(0, size // block_size):
         handle.write(zeroes)
 
-    handle.write('\x00' * (size % block_size))
+    # XXX: This is too complcated. What am I missing?
+    handle.write('\x00' * (size - block_size * (size // block_size)))
     handle.seek(0)
 
 def create_and_open(name, mode='r', size=None):
@@ -63,6 +64,6 @@ def gen_debuggable(function):
                 raise e
             else:
                 import traceback
-                traceback.print_exc()
+                print traceback.print_exc()
 
     return wrapper

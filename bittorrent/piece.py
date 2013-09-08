@@ -1,12 +1,14 @@
 import os
 import hashlib
+import logging
 
 from utils import ceil_div, create_and_open, mkdirs
 
 class PiecedFile(object):
-    def __init__(self, handle, size):
+    def __init__(self, handle, size, offset=None):
         self.handle = handle
         self.size = size
+        self.offset = offset
 
 class PiecedFileSystem(object):
     def __init__(self, files, block_size, block_hashes):
@@ -14,13 +16,17 @@ class PiecedFileSystem(object):
         self.size = 0
 
         for file in files:
+            file.offset = self.size
+
             self.size += file.size
             self.files.append(file)
 
         self.block_size = block_size
-
         self.num_blocks = ceil_div(self.size, block_size)
-        self.last_block_size = self.size - self.block_size * self.num_blocks
+        self.last_block_size = self.size % self.block_size
+
+        if self.last_block_size == 0:
+            self.last_block_size = self.block_size
 
         self.block_hashes = block_hashes
         self.blocks = [None] * self.num_blocks
@@ -43,11 +49,12 @@ class PiecedFileSystem(object):
 
             files.append(PiecedFile(handle, size))
         else:
-            if base_path is not None:
-                base_path = torrent.meta['info']['name']
-
             for info in torrent.meta['info']['files']:
-                folders = [base_path] + info['path'][:-1]
+                folders = [torrent.meta['info']['name']] + info['path'][:-1]
+
+                if base_path is not None:
+                    folders = [base_path] + folders
+
                 filename = info['path'][-1]
                 directory = os.path.join(*folders)
 
@@ -60,17 +67,15 @@ class PiecedFileSystem(object):
 
         return cls(files, block_size, hashes)
 
-    def get_file_by_block(self, index):
-        offset = 0
-        block_offset = index * self.block_size
+    def get_file_by_offset(self, offset):
+        total_offset = 0
 
         for file in self.files:
-            if offset <= block_offset < offset + file.size:
-                file.handle.seek(block_offset - offset)
-
+            if total_offset <= offset < total_offset + file.size:
+                file.handle.seek(offset - total_offset)
                 return file
             else:
-                offset += file.size
+                total_offset += file.size
 
         raise ValueError('Invalid block index')
 
@@ -84,10 +89,18 @@ class PiecedFileSystem(object):
         if index == self.num_blocks - 1 and offset + length > self.last_block_size:
             raise ValueError('Cannot read past end of last block')
 
-        file = self.get_file_by_block(index)
-        file.handle.seek(offset, 1)
+        data = ''
+        position = self.block_size * index + offset
 
-        return file.handle.read(length)
+        while length != 0:
+            file = self.get_file_by_offset(position)
+
+            to_read = min(length, file.offset + file.size - position)
+            data += file.handle.read(to_read)
+            length -= to_read
+            position += to_read
+
+        return data
 
     def write_piece(self, index, offset, data):
         if offset >= self.block_size:
@@ -99,9 +112,16 @@ class PiecedFileSystem(object):
         if index == self.num_blocks - 1 and offset + length > self.last_block_size:
             raise ValueError('Cannot write past end of last block')
 
-        file = self.get_file_by_block(index)
-        file.handle.seek(offset, 1)
-        file.handle.write(data)
+        position = self.block_size * index + offset
+
+        while len(data) != 0:
+            file = self.get_file_by_offset(position)
+
+            to_write = min(len(data), file.size - position + file.offset)
+            file.handle.write(data[:to_write])
+            data = data[to_write:]
+
+            position += to_write
 
         self.verify_block(index, force=True)
 
