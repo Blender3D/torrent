@@ -37,9 +37,11 @@ class UDPTracker(object):
         self.pending_futures = {}
         self.pending_timers = {}
 
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.stream = IOStream(sock)
-        self.stream.connect((self.host, self.port))
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.stream = IOStream(self.socket)
+        self.stream.connect((self.host, self.port), callback=self.start_reading)
+
+    def start_reading(self):
         self.stream.read_until_close(None, self.data_received)
 
     @property
@@ -61,12 +63,16 @@ class UDPTracker(object):
             del self.pending_timers[transaction_id]
 
         if action == 0:  # CONNECT
+            logging.debug('Received a CONNECT response for transaction %d', transaction_id)
             result = self.receive_connect(data[8:])
         elif action == 1:  # ANNOUNCE
+            logging.debug('Received a ANNOUNCE response for transaction %d', transaction_id)
             result = self.receive_announce(data[8:])
         elif action == 2:  # SCRAPE
+            logging.debug('Received a SCRAPE response for transaction %d', transaction_id)
             result = None
         elif action == 3:  # ERROR
+            logging.debug('Received a ERROR response for transaction %d', transaction_id)
             raise Exception(data[8:])
 
         self.pending_futures[transaction_id].set_result(result)
@@ -81,6 +87,8 @@ class UDPTracker(object):
         self.connection_id = struct.unpack('!Q', data)[0]
         self.connection_id_age = datetime.now()
 
+        logging.debug('Received a connection id: %d', self.connection_id)
+
     def receive_announce(self, data):
         interval, leechers, seeders = struct.unpack('!III', data[:12])
         num_peers = seeders + leechers
@@ -94,12 +102,17 @@ class UDPTracker(object):
     @coroutine
     @utils.gen_debuggable
     def send_request(self, action, structure='', arguments=None, transaction_id=None, attempt=1):
+        logging.debug('Sending a type %d message', action)
+
         if action != 0 and datetime.now() - self.connection_id_age > timedelta(minutes=1):
+            logging.debug('Connection id is too old or has not been established. Doing that before sending the actual message...')
+
             self.requesting_connection_id = True
             yield self.request_connection_id()
 
         if transaction_id is None:
             transaction_id = random.getrandbits(32)
+            logging.debug('No transaction id was given. Generated a new one: %s', transaction_id)
 
         data = struct.pack('!QII', self.connection_id, action, transaction_id)
 
@@ -111,6 +124,7 @@ class UDPTracker(object):
             count = self.sent_requests[transaction_id]
 
             if count > 8:
+                logging.error('Tracker did not respond to transaction %d after 8 tries', transaction_id)
                 raise ValueError('Request was retried 8 times with no response')
 
             retry_request = lambda: self.send_request(action, structure, arguments, transaction_id, attempt=attempt + 1)
@@ -119,6 +133,7 @@ class UDPTracker(object):
                 handle = self.pending_timers[transaction_id]
                 IOLoop.instance().remove_timeout(handle)
 
+            logging.debug('Current transaction has already been sent (times: %d). Resending in %d seconds.', self.pending_retries[transaction_id] - 1, 15 * 2 ** count)
             handle = IOLoop.instance().add_timeout(timedelta(seconds=15 * 2 ** count), retry_request)
             self.pending_timers[transaction_id] = handle
         else:
@@ -132,9 +147,7 @@ class UDPTracker(object):
     @coroutine
     @utils.gen_debuggable
     def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
-        if compact:
-            print "UDP trackers are compact"
-
+        logging.debug('Announcing to UDP tracker...')
         response = yield self.send_request(1, '!20s20sQQQIIIiH', [
             self.torrent.info_hash(),
             peer_id,
@@ -147,5 +160,7 @@ class UDPTracker(object):
             -1,
             port
         ])
+
+        logging.debug('Tracker responded with %s', repr(response))
 
         raise Return(response)

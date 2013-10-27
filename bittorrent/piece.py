@@ -172,8 +172,13 @@ class PiecedFileSystem(object):
 
         return result
 
+    def percentage(self):
+        b = self.to_bitfield()
+
+        return 100 * float(sum(b.values())) / float(len(b))
+
     def __str__(self):
-        return '<PiecedFileSystem ' + self.piece_chart() + '>'
+        return '<PiecedFileSystem ' + self.piece_chart() + ' ' + str(self.percentage()) + '% >'
 
     def __del__(self):
         for file in self.files:

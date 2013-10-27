@@ -1,4 +1,5 @@
 import os
+import sys
 import struct
 import itertools
 import errno
@@ -59,7 +60,9 @@ def gen_debuggable(function):
     def wrapper(*args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except Exception as e:
+        except:
+            e = sys.exc_value
+
             if isinstance(e, Return):
                 raise e
             else:

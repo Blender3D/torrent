@@ -1,6 +1,7 @@
 import inspect
 
 from bittorrent.protocol.common import Message
+from bittorrent import utils
 from struct import Struct
 
 class Message(object):
@@ -92,12 +93,13 @@ class Bitfield(Message):
 
     def pack_body(self):
         data = ''
+        bits = ['0'] * (max(self.bitfield) + 1)
 
-        bits = ''.join(str(int(self.bitfield[i])) for i in range(max(self.bitfield) + 1))
-        bits = '0' * (8 - len(bits) % 8) + bits
+        for piece, state in self.bitfield.items():
+            bits[piece] = '1' if state else '0'
 
-        for index in range(0, len(bits), 8):
-            data += chr(int(bits[index:index + 8], 2))
+        for chunk in utils.grouper(8, bits, fillvalue='0'):
+            data += chr(int(''.join(chunk), 2))
 
         return data
 
