@@ -18,18 +18,30 @@ class HTTPTracker(object):
         self.client = AsyncHTTPClient()
 
     @coroutine
-    def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
-        tracker_url = url_concat(self.url, {
+    def announce(self, peer_id, port, event=None, num_wanted=None, compact=True, no_peer_id=None):
+        params = {
             'info_hash': self.torrent.info_hash(),
             'peer_id': peer_id,
             'port': port,
             'uploaded': self.torrent.uploaded,
             'downloaded': self.torrent.downloaded,
             'left': self.torrent.remaining,
-            'event': event,
-            'num_wanted': num_wanted,
             'compact': int(compact)
-        })
+        }
+
+        if num_wanted is not None:
+            params['numwant'] = num_wanted
+
+        if compact is not None:
+            params['compact'] = int(bool(compact))
+
+        if no_peer_id is not None:
+            params['no_peer_id'] = int(bool(no_peer_id))
+
+        if event is not None:
+            params['event'] = event
+
+        tracker_url = url_concat(self.url, params)
 
         response = yield self.client.fetch(tracker_url)
         decoded_body = bencode.decode(response.body)

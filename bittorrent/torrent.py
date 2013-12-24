@@ -1,8 +1,8 @@
 import hashlib
 
-from bittorrent import bencode
-from bittorrent.tracker import Tracker
-from bittorrent.utils import grouper
+from . import bencode
+from .tracker import Tracker
+from .utils import grouper
 
 class Torrent(object):
     def __init__(self, handle=None):

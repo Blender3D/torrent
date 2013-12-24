@@ -2,6 +2,7 @@ import os
 import sys
 import struct
 import itertools
+import logging
 import errno
 
 from functools import wraps
@@ -60,13 +61,7 @@ def gen_debuggable(function):
     def wrapper(*args, **kwargs):
         try:
             return function(*args, **kwargs)
-        except:
-            e = sys.exc_value
-
-            if isinstance(e, Return):
-                raise e
-            else:
-                import traceback
-                print traceback.print_exc()
+        except Exception as e:
+            logging.exception(e)
 
     return wrapper

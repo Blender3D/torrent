@@ -4,6 +4,7 @@ import random
 import logging
 
 from datetime import datetime, timedelta
+from collections import defaultdict
 
 from tornado.gen import coroutine, Return, Task
 from tornado.concurrent import Future
@@ -16,7 +17,7 @@ from bittorrent.tracker.common import TrackerResponse
 
 class UDPTracker(object):
     events = {
-        'none': 0,
+        None: 0,
         'completed': 1,
         'started': 2,
         'stopped': 3
@@ -33,13 +34,12 @@ class UDPTracker(object):
         self.connection_id_age = datetime.min
         self.requesting_connection_id = False
 
-        self.pending_retries = {}
+        self.pending_retries = defaultdict(int)
         self.pending_futures = {}
         self.pending_timers = {}
 
-        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.stream = IOStream(self.socket)
-        self.stream.connect((self.host, self.port), callback=self.start_reading)
+        self.socket = None
+        self.stream = None
 
     def start_reading(self):
         self.stream.read_until_close(None, self.data_received)
@@ -51,6 +51,8 @@ class UDPTracker(object):
     def data_received(self, data):
         if not data:
             return
+
+        logging.debug('Received some data')
 
         action, transaction_id = struct.unpack('!II', data[:8])
 
@@ -66,13 +68,13 @@ class UDPTracker(object):
             logging.debug('Received a CONNECT response for transaction %d', transaction_id)
             result = self.receive_connect(data[8:])
         elif action == 1:  # ANNOUNCE
-            logging.debug('Received a ANNOUNCE response for transaction %d', transaction_id)
+            logging.debug('Received an ANNOUNCE response for transaction %d', transaction_id)
             result = self.receive_announce(data[8:])
         elif action == 2:  # SCRAPE
             logging.debug('Received a SCRAPE response for transaction %d', transaction_id)
             result = None
         elif action == 3:  # ERROR
-            logging.debug('Received a ERROR response for transaction %d', transaction_id)
+            logging.debug('Received an ERROR response for transaction %d', transaction_id)
             raise Exception(data[8:])
 
         self.pending_futures[transaction_id].set_result(result)
@@ -101,7 +103,7 @@ class UDPTracker(object):
 
     @coroutine
     @utils.gen_debuggable
-    def send_request(self, action, structure='', arguments=None, transaction_id=None, attempt=1):
+    def send_request(self, action, structure=None, arguments=None, transaction_id=None, attempt=1):
         logging.debug('Sending a type %d message', action)
 
         if action != 0 and datetime.now() - self.connection_id_age > timedelta(minutes=1):
@@ -116,50 +118,63 @@ class UDPTracker(object):
 
         data = struct.pack('!QII', self.connection_id, action, transaction_id)
 
-        if structure and arguments:
+        if structure is not None and arguments is not None:
             data += struct.pack(structure, *arguments)
 
-        if transaction_id in self.pending_retries:
-            self.pending_retries[transaction_id] += 1
-            count = self.sent_requests[transaction_id]
-
-            if count > 8:
-                logging.error('Tracker did not respond to transaction %d after 8 tries', transaction_id)
-                raise ValueError('Request was retried 8 times with no response')
-
-            retry_request = lambda: self.send_request(action, structure, arguments, transaction_id, attempt=attempt + 1)
-
-            if transaction_id in self.pending_timers:
-                handle = self.pending_timers[transaction_id]
-                IOLoop.instance().remove_timeout(handle)
-
-            logging.debug('Current transaction has already been sent (times: %d). Resending in %d seconds.', self.pending_retries[transaction_id] - 1, 15 * 2 ** count)
-            handle = IOLoop.instance().add_timeout(timedelta(seconds=15 * 2 ** count), retry_request)
-            self.pending_timers[transaction_id] = handle
-        else:
+        if transaction_id not in self.pending_retries:
             self.pending_futures[transaction_id] = Future()
-            yield Task(self.stream.write, data)
 
+        self.pending_retries[transaction_id] += 1
+        count = self.pending_retries[transaction_id]
+
+        if count > 8:
+            logging.error('Tracker did not respond to transaction %d after 8 tries', transaction_id)
+            raise RuntimeError('Request was retried 8 times with no response')
+
+        if transaction_id in self.pending_timers:
+            IOLoop.instance().remove_timeout(self.pending_timers[transaction_id])
+
+        retry_request = lambda: self.send_request(action, structure, arguments, transaction_id, attempt=attempt + 1)
+        self.pending_timers[transaction_id] = IOLoop.instance().add_timeout(timedelta(seconds=15 * 2 ** count), retry_request)
+
+        logging.debug('Current transaction has already been sent %d times.', self.pending_retries[transaction_id] - 1)
+        logging.debug('Resending in %d seconds.', 15 * 2 ** count)
+
+        yield Task(self.stream.write, data)
         result = yield self.pending_futures[transaction_id]
 
         raise Return(result)
 
     @coroutine
     @utils.gen_debuggable
-    def announce(self, peer_id, port, event='started', num_wanted=10, compact=True):
+    def announce(self, peer_id, port, event=None, num_wanted=-1):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        try:
+            sock.connect((self.host, self.port))
+        except socket.error:
+            raise RuntimeError('Could not connect to tracker')
+
+        self.stream = IOStream(sock)
+        self.start_reading()
+
         logging.debug('Announcing to UDP tracker...')
-        response = yield self.send_request(1, '!20s20sQQQIIIiH', [
-            self.torrent.info_hash(),
-            peer_id,
-            self.torrent.downloaded,
-            self.torrent.remaining,
-            self.torrent.uploaded,
-            self.events[event],
-            0,
-            0,
-            -1,
-            port
-        ])
+        response = yield self.send_request(
+            action=1,
+            structure='!20s20sQQQIIIiH',
+            arguments=[
+                self.torrent.info_hash(),
+                peer_id,
+                self.torrent.downloaded,
+                self.torrent.remaining,
+                self.torrent.uploaded,
+                self.events[event],
+                0,
+                0,
+                -1,
+                port
+            ]
+        )
 
         logging.debug('Tracker responded with %s', repr(response))
 

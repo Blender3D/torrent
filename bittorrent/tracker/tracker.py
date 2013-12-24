@@ -1,10 +1,13 @@
-import urlparse
+try:
+    from urlparse import urlsplit
+except ImportError:
+    from urllib.parse import urlsplit
 
 from bittorrent.tracker.http import HTTPTracker
 from bittorrent.tracker.udp import UDPTracker
 
 def Tracker(url, torrent, tier=0):
-    o = urlparse.urlsplit(url)
+    o = urlsplit(url)
 
     if o.scheme == 'http':
         return HTTPTracker(url, torrent, tier)

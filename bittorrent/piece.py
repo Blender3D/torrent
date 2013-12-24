@@ -2,7 +2,7 @@ import os
 import hashlib
 import logging
 
-from utils import ceil_div, create_and_open, mkdirs
+from .utils import ceil_div, create_and_open, mkdirs
 
 class PiecedFile(object):
     def __init__(self, handle, size, offset=None):
@@ -77,14 +77,14 @@ class PiecedFileSystem(object):
             else:
                 total_offset += file.size
 
-        raise ValueError('Invalid block index')
+        raise ValueError('Invalid offset')
 
     def read_piece(self, index, offset, length):
         if offset >= self.block_size:
             raise ValueError('Offset must be smaller than the block size')
 
         if offset + length > self.block_size:
-            raise ValueError('Cannot read across blocks')
+            raise ValueError('Invalid piece length: pieces cannot span across blocks')
 
         if index == self.num_blocks - 1 and offset + length > self.last_block_size:
             raise ValueError('Cannot read past end of last block')
@@ -97,6 +97,7 @@ class PiecedFileSystem(object):
 
             to_read = min(length, file.offset + file.size - position)
             data += file.handle.read(to_read)
+
             length -= to_read
             position += to_read
 
@@ -139,7 +140,7 @@ class PiecedFileSystem(object):
         self.verify_block(index, force=True)
 
     def verify_block(self, index, force=False):
-        if not (0 <= index < self.num_blocks):
+        if not 0 <= index < self.num_blocks:
             raise ValueError('Invalid block index')
 
         if not force and self.blocks[index] is not None:
@@ -151,7 +152,10 @@ class PiecedFileSystem(object):
         return verified
 
     def verify(self):
-        return all(self.verify_block(index) for index in range(self.num_blocks))
+        for index in range(self.num_blocks):
+            self.verify_block(index)
+
+        return all(self.blocks.values())
 
     def to_bitfield(self):
         return {index: self.verify_block(index) for index in range(self.num_blocks)}
@@ -165,7 +169,7 @@ class PiecedFileSystem(object):
 
             if hash == self.block_hashes[index]:
                 result += '*'
-            elif data.strip('\x00') != '':
+            elif data.strip('\0') != '':
                 result += 'o'
             else:
                 result += '.'
@@ -190,4 +194,3 @@ if __name__ == '__main__':
 
     torrent = Torrent('ubuntu-13.04-desktop-amd64.iso.torrent')
     f = PiecedFileSystem.from_torrent(torrent)
-    print f

@@ -1,5 +1,11 @@
+from . import string_type
+
 def encode(obj):
-    if isinstance(obj, basestring):
+    '''
+    Bencodes the object. The object must be an instance of: str, int, list, or dict.
+    '''
+
+    if isinstance(obj, string_type):
         return '{0}:{1}'.format(len(obj), obj)
     elif isinstance(obj, int):
         return 'i{0}e'.format(obj)
@@ -13,4 +19,4 @@ def encode(obj):
 
         return 'd{0}e'.format(values)
     else:
-        raise TypeError('Unsupported type: {0}'.format(type(obj)))
+        raise TypeError('Unsupported type: {0}. Must be one of: str, int, list, dict.'.format(type(obj)))

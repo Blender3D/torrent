@@ -93,7 +93,7 @@ class Bitfield(Message):
 
     def pack_body(self):
         data = ''
-        bits = ['0'] * (max(self.bitfield) + 1)
+        bits = ['0'] * (max(self.bitfield.keys()) + 1)
 
         for piece, state in self.bitfield.items():
             bits[piece] = '1' if state else '0'
@@ -114,6 +114,9 @@ class Bitfield(Message):
                 index += 1
 
         return (d,)
+
+    def __nonzero__(self):
+        return any(self.bitfield.values())
 
 class Request(Message):
     id = 6

@@ -61,10 +61,13 @@ class Client(object):
 
     @gen_debuggable
     def desired_pieces(self):
-        result = [p for p in self.peer_pieces if not self.server.filesystem.blocks[p]]
-        logging.debug('I want %s', repr(result))
+        want = [p for p in self.peer_pieces if not self.server.filesystem.blocks[p]]
+        have = [p for p in self.peer_pieces if self.server.filesystem.blocks[p]]
 
-        return result
+        logging.debug('I have %s', repr(have))
+        logging.debug('I want %s', repr(want))
+
+        return want
 
     def maybe_express_interest(self):
         if self.am_interested:
@@ -75,6 +78,7 @@ class Client(object):
 
             self.am_interested = True
             self.send_message(Interested())
+
             return
 
         if self.desired_pieces():
@@ -99,11 +103,13 @@ class Client(object):
 
     @coroutine
     @gen_debuggable
-    def message_loop(self):
+    def message_loop(self, _=None):
         PeriodicCallback(self.send_keepalive, 30 * 1000).start()
 
-        logging.info('Starting message loop')
-        self.send_message(Bitfield(self.server.filesystem.to_bitfield()))
+        bitfield = Bitfield(self.server.filesystem.to_bitfield())
+
+        if bitfield:
+            self.send_message(bitfield)
 
         while True:
             while self.message_queue:
@@ -111,7 +117,7 @@ class Client(object):
 
             message_type, message = yield self.get_message()
 
-            logging.info('Client sent us a %s', message.__class__.__name__)
+            logging.debug('Client sent us a %s', message.__class__.__name__)
 
             if isinstance(message, Unchoke):
                 self.maybe_express_interest()
@@ -177,12 +183,12 @@ class Client(object):
     def handshake(self):
         message = chr(len(self.protocol))
         message += self.protocol
-        message += '\x00' * 8
+        message += '\0' * 8
         message += self.server.torrent.info_hash()
         message += self.server.peer_id
 
         logging.debug('Sending a handshake')
-        logging.info(repr(message))
+        logging.debug(repr(message))
 
         yield self.write(message)
 
@@ -195,100 +201,103 @@ class Client(object):
         peer_id = yield self.read_bytes(20)
 
         logging.debug('Shook hands with %s', repr(peer_id))
+
         self.message_loop()
 
-    def received_keepalive(self):
-        logging.debug('Got a keepalive')
-
-    def received_bitfield(self, bitfield):
-        logging.debug('Got a bitfield')
-
     def disconnected(self, result=None):
-        logging.debug('Peer disconnected %s', self.peer)
-        self.server.disconnected(self)
+        logging.info('Peer disconnected %s', self.peer)
+        self.server.peer_disconnected(self.peer)
 
 
 
 class Server(TCPServer):
-    def __init__(self, torrent):
+    def __init__(self, torrent, max_peers=20, download_path='downloads'):
         TCPServer.__init__(self)
 
-        self.torrent = torrent
-        self.clients = []
-        
-        self.filesystem = PiecedFileSystem.from_torrent(torrent, base_path='downloads')
-
         self.peer_id = peer_id()
+        self.torrent = torrent
+
+        self.max_peers = max_peers
+        self.connected_peers = set()
+        self.connecting_peers = set()
+        self.unconnected_peers = set()
+
+        self.filesystem = PiecedFileSystem.from_torrent(torrent, base_path=download_path)
 
     @coroutine
     @gen_debuggable
     def start(self, num_processes=1):
         TCPServer.start(self, num_processes)
 
-        self.peers = yield self.get_peers()
-        logging.info('Got %d peers', len(self.peers))
-
-        for peer in self.peers:
-            self.connect(peer)
+        self.connect_to_peers()
 
     @coroutine
     @gen_debuggable
-    def get_peers(self):
-        for tracker in self.torrent.trackers:
-            logging.info('Announcing to tracker %s', tracker.url)
-            
-            response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50, compact=True)
-            raise Return(response.peers)
+    def scrape_trackers(self):
+        yield [self.scrape_tracker(tracker) for tracker in self.torrent.trackers]
+
+    @coroutine
+    @gen_debuggable
+    def scrape_tracker(self, tracker):
+        logging.info('Announcing to tracker %s', tracker.url)
+
+        seen_peers = self.connected_peers & self.connecting_peers
+        tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
+        logging.info('Announced to tracker %s', tracker.url)
+
+        self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
+
+    @coroutine
+    @gen_debuggable
+    def connect_to_peers(self):
+        if not self.unconnected_peers:
+            yield self.scrape_trackers()
+
+        if not self.unconnected_peers:
+            logging.warning('Trackers did not respond with any new peers!')
+            return
+
+        num_active = self.max_peers - len(self.connected_peers) - len(self.connecting_peers)
+
+        for i in range(min(len(self.unconnected_peers), num_active)):
+            self.connect(self.unconnected_peers.pop())
 
     def connect(self, peer):
         logging.info('Connecting to %s', peer)
+        self.connecting_peers.append(peer)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+
         stream = IOStream(sock)
+        client = Client(stream, peer, self)
+        stream.set_close_callback(lambda: self.peer_disconnected(client))
+        stream.connect((peer.address, peer.port), callback=lambda: self.peer_connected(client))
 
-        stream.set_close_callback(lambda: self.peer_not_connected(peer))
-        stream.connect((peer.address, peer.port), callback=lambda: self.peer_connected(stream, peer))
+    def peer_not_connected(self, client):
+        if client in self.connecting_peers:
+            logging.error('Could not connnect to %s', client)
+            self.connecting_peers.remove(client)
+        elif client in self.connected_peers:
+            logging.error('Peer disconnected: %s', client)
+            self.connected_peers.remove(client)
 
-    def peer_not_connected(self, peer):
-        logging.error('Could not connnect to %s', peer)
+        self.connect_to_peers()
 
-        if not self.peers:
-            self.peers = yield self.get_peers()
 
-        self.connect(self.peers[-1])
+    def peer_connected(self, client):
+        logging.info('Connnected to %s', client)
 
-    def peer_connected(self, stream, peer):
-        logging.info('Connnected to %s', peer)
-        self.clients.append(Client(stream, peer, self))
-
-    @coroutine
-    @gen_debuggable
-    def disconnected(self, client):
-        self.clients.remove(client)
-        
-        if client.peer not in self.peers:
-            logging.error('We weren\'t connected to the peer?')
-
-        self.peers.remove(client.peer)
-
-        if not self.peers:
-            self.peers = yield self.get_peers()
-
-        self.connect(self.peers[-1])
+        self.connecting_peers.remove(client)
+        self.connected_peers.add(client)
 
     def announce_message(self, message):
-        for client in self.clients:
+        for client in self.connected_peers:
             client.message_queue.append(message)
 
     def listen(self, port, address=""):
         self.port = port
 
         TCPServer.listen(self, port, address)
-
-    def handle_stream(self, stream, address):
-        logging.info('Got a connection from %s', address)
-
-        Client(stream, address, self)
 
 
 
@@ -300,7 +309,7 @@ if __name__ == '__main__':
     torrent = Torrent('torrents/[kickass.to]pixies.where.is.my.mind.torrent')
     
     server = Server(torrent)
-    server.listen(6882)
+    server.listen(6881)
     server.start()
 
     IOLoop.instance().start()
