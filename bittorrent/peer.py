@@ -40,5 +40,8 @@ class Peer(object):
         else:
             return sum(sample.data for sample in self.speeds) / float(self.speeds.maxlen)
 
+    def __hash__(self):
+        return hash((self.address, self.port, self.id))
+
     def __repr__(self):
         return '<Peer {self.address}:{self.port}>'.format(self=self)

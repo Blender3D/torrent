@@ -63,5 +63,6 @@ def gen_debuggable(function):
             return function(*args, **kwargs)
         except Exception as e:
             logging.exception(e)
+            raise
 
     return wrapper

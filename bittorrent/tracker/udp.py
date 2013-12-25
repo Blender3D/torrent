@@ -18,6 +18,7 @@ from bittorrent.tracker.common import TrackerResponse, TrackerFailure
 class UDPTracker(object):
     events = {
         None: 0,
+        'none': 0,
         'completed': 1,
         'started': 2,
         'stopped': 3
@@ -136,7 +137,7 @@ class UDPTracker(object):
         logging.debug('Current transaction has already been sent %d times.', self.pending_retries[transaction_id] - 1)
         logging.debug('Resending in %d seconds.', 15 * 2 ** count)
 
-        yield Task(self.stream.write, data)
+        self.stream.write(data)
         result = yield self.pending_futures[transaction_id]
 
         raise Return(result)
@@ -151,8 +152,7 @@ class UDPTracker(object):
         except socket.error:
             raise TrackerFailure('Could not connect to tracker')
 
-        self.stream.read_until_close(None, self.data_received)
-
+        self.stream.read_until_close(self.data_received, self.data_received)
         logging.debug('Announcing to UDP tracker...')
 
         try:
