@@ -5,7 +5,7 @@ import random
 import functools
 
 from bittorrent.torrent import Torrent
-from bittorrent.tracker import Tracker
+from bittorrent.tracker import Tracker, TrackerFailure
 from bittorrent.piece import PiecedFileSystem
 from bittorrent.protocol.message import (Messages, KeepAlive, Choke,
                                          Unchoke, Interested, NotInterested,
@@ -35,10 +35,11 @@ class Client(object):
         self.am_interested = False
         self.peer_interested = False
 
-        self.peer_pieces = {}
+        self.peer_blocks = {}
         self.message_queue = []
 
         self.handshake()
+        self.keepalive_callback = PeriodicCallback(lambda: self.send_message(KeepAlive()), 30 * 1000).start()
 
     @coroutine
     @gen_debuggable
@@ -59,53 +60,9 @@ class Client(object):
 
         raise Return(result)
 
-    @gen_debuggable
-    def desired_pieces(self):
-        want = [p for p in self.peer_pieces if not self.server.filesystem.blocks[p]]
-        have = [p for p in self.peer_pieces if self.server.filesystem.blocks[p]]
-
-        logging.debug('I have %s', repr(have))
-        logging.debug('I want %s', repr(want))
-
-        return want
-
-    def maybe_express_interest(self):
-        if self.am_interested:
-            return
-
-        if self.is_endgame:
-            logging.debug('It\'s the endgame, so we\'re always interested')
-
-            self.am_interested = True
-            self.send_message(Interested())
-
-            return
-
-        if self.desired_pieces():
-            logging.debug('Peer has something good. I am interested.')
-            self.am_interested = True
-            self.send_message(Interested())
-        else:
-            logging.debug('Nope, peer\'s got nothin\': %s', repr(self.desired_pieces()))
-            self.am_interested = False
-            self.send_message(NotInterested())
-
-    def send_keepalive(self):
-        self.send_message(KeepAlive())
-
-    @property
-    def missing_pieces(self):
-        return [i for i in range(self.server.filesystem.num_blocks) if not self.server.filesystem.blocks[i]]
-
-    @property
-    def is_endgame(self):
-        return len(self.missing_pieces) / float(self.server.filesystem.num_blocks) < 0.05
-
     @coroutine
     @gen_debuggable
     def message_loop(self, _=None):
-        PeriodicCallback(self.send_keepalive, 30 * 1000).start()
-
         bitfield = Bitfield(self.server.filesystem.to_bitfield())
 
         if bitfield:
@@ -128,10 +85,10 @@ class Client(object):
             elif isinstance(message, Bitfield):
                 truncated = {key: value for key, value in message.bitfield.items() if key < self.server.filesystem.num_blocks}
 
-                self.peer_pieces = truncated
+                self.peer_blocks = truncated
                 self.maybe_express_interest()
             elif isinstance(message, Have):
-                self.peer_pieces[message.piece] = True
+                self.peer_blocks[message.piece] = True
                 self.maybe_express_interest()
             elif isinstance(message, Piece):
                 logging.debug('Piece info: %d, %d, %d', message.index, message.begin, len(message.block))
@@ -183,7 +140,7 @@ class Client(object):
     def handshake(self):
         message = chr(len(self.protocol))
         message += self.protocol
-        message += '\0' * 8
+        message += '\0\0\0\0\0\0\0\0'
         message += self.server.torrent.info_hash()
         message += self.server.peer_id
 
@@ -195,10 +152,25 @@ class Client(object):
         logging.debug('Listening for a handshake')
 
         protocol_length = yield self.read_bytes(1)
+
+        if ord(protocol_length) != len(self.protocol):
+            raise ValueError('Invalid protocol length')
+
         protocol_name = yield self.read_bytes(ord(protocol_length))
+
+        if protocol_name != self.protocol_name:
+            raise ValueError('Invalid protocol name')
+
         reserved_bytes = yield self.read_bytes(8)
         info_hash = yield self.read_bytes(20)
+
+        if info_hash != self.server.torrent.info_hash():
+            raise ValueError('Wrong info hash', info_hash)
+
         peer_id = yield self.read_bytes(20)
+
+        if peer_id != self.peer.id:
+            raise ValueError('Wrong peer id')
 
         logging.debug('Shook hands with %s', repr(peer_id))
 
@@ -234,18 +206,24 @@ class Server(TCPServer):
     @coroutine
     @gen_debuggable
     def scrape_trackers(self):
-        yield [self.scrape_tracker(tracker) for tracker in self.torrent.trackers]
+        for tracker in self.torrent.trackers:
+            future = self.scrape_tracker(tracker)
+            IOLoop.instance().add_future(future, lambda: self.tracker_done(future))
 
     @coroutine
     @gen_debuggable
     def scrape_tracker(self, tracker):
         logging.info('Announcing to tracker %s', tracker.url)
 
-        seen_peers = self.connected_peers & self.connecting_peers
-        tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
-        logging.info('Announced to tracker %s', tracker.url)
+        seen_peers = self.connected_peers.union(self.connecting_peers)
 
-        self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
+        try:
+            tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
+            logging.info('Announced to tracker %s', tracker.url)
+            self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
+        except TrackerFailure:
+            logging.warning('Announce to tracker failed')
+
 
     @coroutine
     @gen_debuggable

@@ -68,7 +68,7 @@ class TestTracker(AsyncTestCase):
     @gen_test
     def test_udp(self):
         torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
-        tracker = Tracker('udp://tracker.openbittorrent.com:80/announce', torrent)
+        tracker = Tracker('udp://tracker.ccc.de:80', torrent)
 
         response = yield tracker.announce(utils.peer_id(), 6881)
 

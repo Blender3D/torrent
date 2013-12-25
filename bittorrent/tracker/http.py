@@ -3,7 +3,7 @@ import struct
 
 from bittorrent import bencode, utils
 from bittorrent.peer import Peer
-from bittorrent.tracker import TrackerResponse
+from bittorrent.tracker import TrackerResponse, TrackerFailure
 
 from tornado.gen import coroutine, Return
 from tornado.httpclient import AsyncHTTPClient
@@ -45,6 +45,10 @@ class HTTPTracker(object):
 
         response = yield self.client.fetch(tracker_url)
         decoded_body = bencode.decode(response.body)
+
+        if 'failure reason' in decoded_body:
+            raise Return(TrackerFailure(decoded_body['TrackerFailure']))
+
         peers = list(self.get_peers(decoded_body))
         result = TrackerResponse(peers, decoded_body['interval'])
 

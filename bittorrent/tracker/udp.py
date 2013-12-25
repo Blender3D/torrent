@@ -9,11 +9,11 @@ from collections import defaultdict
 from tornado.gen import coroutine, Return, Task
 from tornado.concurrent import Future
 from tornado.ioloop import IOLoop
-from tornado.iostream import IOStream
 
 from bittorrent import bencode, utils
+from bittorrent.udp import UDPStream
 from bittorrent.peer import Peer
-from bittorrent.tracker.common import TrackerResponse
+from bittorrent.tracker.common import TrackerResponse, TrackerFailure
 
 class UDPTracker(object):
     events = {
@@ -40,9 +40,6 @@ class UDPTracker(object):
 
         self.socket = None
         self.stream = None
-
-    def start_reading(self):
-        self.stream.read_until_close(None, self.data_received)
 
     @property
     def url(self):
@@ -102,7 +99,6 @@ class UDPTracker(object):
         return TrackerResponse(peers, interval)
 
     @coroutine
-    @utils.gen_debuggable
     def send_request(self, action, structure=None, arguments=None, transaction_id=None, attempt=1):
         logging.debug('Sending a type %d message', action)
 
@@ -146,36 +142,39 @@ class UDPTracker(object):
         raise Return(result)
 
     @coroutine
-    @utils.gen_debuggable
     def announce(self, peer_id, port, event=None, num_wanted=-1):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.stream = UDPStream(self.socket)
 
         try:
-            sock.connect((self.host, self.port))
+            self.stream.connect((self.host, self.port))
         except socket.error:
-            raise RuntimeError('Could not connect to tracker')
+            raise TrackerFailure('Could not connect to tracker')
 
-        self.stream = IOStream(sock)
-        self.start_reading()
+        self.stream.read_until_close(None, self.data_received)
 
         logging.debug('Announcing to UDP tracker...')
-        response = yield self.send_request(
-            action=1,
-            structure='!20s20sQQQIIIiH',
-            arguments=[
-                self.torrent.info_hash(),
-                peer_id,
-                self.torrent.downloaded,
-                self.torrent.remaining,
-                self.torrent.uploaded,
-                self.events[event],
-                0,
-                0,
-                -1,
-                port
-            ]
-        )
 
-        logging.debug('Tracker responded with %s', repr(response))
+        try:
+            response = yield self.send_request(
+                action=1,
+                structure='!20s20sQQQIIIiH',
+                arguments=[
+                    self.torrent.info_hash(),
+                    peer_id,
+                    self.torrent.downloaded,
+                    self.torrent.remaining,
+                    self.torrent.uploaded,
+                    self.events[event],
+                    0,
+                    0,
+                    -1,
+                    port
+                ]
+            )
 
-        raise Return(response)
+            logging.debug('Tracker responded with %s', repr(response))
+
+            raise Return(response)
+        except RuntimeError:
+            raise TrackerFailure('Tracker did not respond after 8 attempts')
