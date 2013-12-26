@@ -130,60 +130,47 @@ class Client(object):
 
     @coroutine
     @gen_debuggable
-    def message_loop(self, _=None):
+    def message_loop(self):
         bitfield = Bitfield(self.server.filesystem.to_bitfield())
 
         if bitfield:
             self.send_message(bitfield)
 
         while True:
-            while self.message_queue:
-                self.send_message(self.message_queue.pop(0))
-
             message_type, message = yield self.get_message()
 
-            logging.debug('Client sent us a %s', message.__class__.__name__)
+            logging.info('Client sent us a %s', message.__class__.__name__)
 
-            if isinstance(message, Unchoke):
-                self.maybe_express_interest()
-                piece = random.choice(self.desired_pieces())
+            try:
+                if isinstance(message, KeepAlive):
+                    self.got_keepalive(message)
+                elif isinstance(message, Choke):
+                    self.got_choke(message)
+                elif isinstance(message, Unchoke):
+                    self.got_unchoke(message)
+                elif isinstance(message, Interested):
+                    self.got_interested(message)
+                elif isinstance(message, NotInterested):
+                    self.got_notinterested(message)
+                elif isinstance(message, Have):
+                    self.got_have(message)
+                elif isinstance(message, Bitfield):
+                    self.got_bitfield(message)
+                elif isinstance(message, Request):
+                    self.got_request(message)
+                elif isinstance(message, Piece):
+                    self.got_piece(message)
+                    self.maybe_request_piece()
+                elif isinstance(message, Cancel):
+                    self.got_cancel(message)
+                elif isinstance(message, Port):
+                    self.got_port(message)
+                else:
+                    logging.error('Invalid message received %s', repr(message))
+            except Exception as e:
+                logging.exception(e)
 
-                for start in range(0, self.server.filesystem.block_size, 2**14):
-                    self.send_message(Request(piece, start, 2**14))
-            elif isinstance(message, Bitfield):
-                truncated = {key: value for key, value in message.bitfield.items() if key < self.server.filesystem.num_blocks}
-
-                self.peer_blocks = truncated
-                self.maybe_express_interest()
-            elif isinstance(message, Have):
-                self.peer_blocks[message.piece] = True
-                self.maybe_express_interest()
-            elif isinstance(message, Piece):
-                logging.debug('Piece info: %d, %d, %d', message.index, message.begin, len(message.block))
-                #self.peer.add_data_sample(len(message.block))
-                self.server.filesystem.write_piece(message.index, message.begin, message.block)
-
-                if self.server.filesystem.verify_block(message.index):
-                    logging.info('Got a complete piece!')
-                    #logging.critical(self.server.filesystem)
-
-                    #if self.server.filesystem.verify():
-                    #    logging.info('We got the file!')
-                    #    IOLoop.instance().stop()
-
-                    self.server.announce_message(Have(message.index))
-            elif isinstance(message, Request):
-                if message.length > 2**15:
-                    raise ValueError('Requested too much data')
-
-                data = self.server.filesystem.read_piece(message.index, message.begin, message.length)
-                self.send_message(Piece(message.index, message.begin, data))
-            elif isinstance(message, Interested):
-                self.peer_interested = True
-            elif isinstance(message, KeepAlive):
-                pass
-            else:
-                logging.error('Invalid message received %s', repr(message))
+            continue
 
             if self.is_endgame:
                 if self.server.filesystem.verify():
@@ -194,41 +181,101 @@ class Client(object):
                     for start in range(0, self.server.filesystem.block_size, 2**14):
                         self.server.announce_message(Request(piece, start, 2**14))
 
+    def got_choke(self, message):
+        self.peer_choking = True
+
+    def got_unchoke(self, message):
+        self.maybe_express_interest()
+        self.maybe_request_piece()
+
+    def maybe_request_piece(self):
+        if not self.am_interested:
+            return
+
+        piece = random.choice(self.desired_pieces())
+
+        if piece == self.server.filesystem.num_blocks - 1:
+            size = self.server.filesystem.last_block_size
+        else:
+            size = self.server.filesystem.block_size
+
+        length = min(size, 2**14)
+
+        for start in range(0, size, length):
+            self.send_message(Request(piece, start, length))
+
+        if size % length != 0:
+            end = length * (size // length)
+            self.send_message(Request(piece, end, size - end))
+
+    def got_bitfield(self, message):
+        truncated = {key: value for key, value in message.bitfield.items() if key < self.server.filesystem.num_blocks}
+
+        self.peer_blocks = truncated
+        self.maybe_express_interest()
+
+    def got_have(self, message):
+        self.peer_blocks[message.piece] = True
+        self.maybe_express_interest()
+
+    def got_piece(self, message):
+        logging.debug('Piece info: %d, %d, %d', message.index, message.begin, len(message.block))
+        #self.peer.add_data_sample(len(message.block))
+        self.server.filesystem.write_piece(message.index, message.begin, message.block)
+
+        if self.server.filesystem.verify_block(message.index):
+            logging.info('Got a complete block!')
+            logging.critical(self.server.filesystem)
+
+            if self.server.filesystem.verify():
+                logging.info('We got the file!')
+                IOLoop.instance().stop()
+
+            self.server.announce_message(Have(message.index))
+
+    def got_request(self, message):
+        if message.length > 2**15:
+            raise ValueError('Requested too much data')
+
+        data = self.server.filesystem.read_piece(message.index, message.begin, message.length)
+        self.send_message(Piece(message.index, message.begin, data))
+    
+    def got_interested(self, message):
+        self.peer_interested = True
+
+    def got_keepalive(self, message):
+        pass
+
     @gen_debuggable
     def desired_pieces(self):
         want = [p for p in self.peer_blocks if not self.server.filesystem.blocks[p]]
-        have = [p for p in self.peer_blocks if self.server.filesystem.blocks[p]]
-
-        logging.debug('I have %s', repr(have))
         logging.debug('I want %s', repr(want))
 
         return want
 
     @gen_debuggable
     def maybe_express_interest(self):
-        if self.am_interested:
-            return
+        logging.debug('Possibly expressing interest')
 
-        if self.is_endgame:
-            logging.debug('It\'s the endgame, so we\'re always interested')
+        if not self.am_interested:
+            logging.debug('I am not currently interested')
+
+            if self.is_endgame:
+                logging.debug('It\'s the endgame, so we\'re always interested')
+            elif self.desired_pieces():
+                logging.debug('Peer has something good. I am interested.')
+            else:
+                logging.debug('I am not interested and this peer has nothing.')
+                return
 
             self.am_interested = True
             self.send_message(Interested())
-
-            return
-
-        if self.desired_pieces():
-            logging.debug('Peer has something good. I am interested.')
-            self.am_interested = True
-            self.send_message(Interested())
-        else:
-            logging.debug('Nope, peer\'s got nothin\': %s', repr(self.desired_pieces()))
+        elif not self.desired_pieces():
+            logging.debug('I was interested, but this peer has nothing. Now I am not interested')
             self.am_interested = False
             self.send_message(NotInterested())
 
-    @gen_debuggable
-    def send_keepalive(self):
-        self.send_message(KeepAlive())
+        logging.debug('I am interested and this peer has stuff. This should not happen')
 
     @property
     @gen_debuggable
@@ -240,7 +287,6 @@ class Client(object):
     def is_endgame(self):
         return len(self.missing_pieces) / float(self.server.filesystem.num_blocks) < 0.05
 
-
     @gen_debuggable
     def disconnected(self, result=None):
         logging.info('Peer disconnected %s', self.peer)
@@ -250,7 +296,7 @@ class Client(object):
 
 class Server(TCPServer):
     @gen_debuggable
-    def __init__(self, torrent, max_peers=20, download_path='downloads'):
+    def __init__(self, torrent, max_peers=50, download_path='downloads'):
         TCPServer.__init__(self)
 
         self.peer_id = peer_id()
@@ -276,6 +322,8 @@ class Server(TCPServer):
     @coroutine
     @gen_debuggable
     def connect_to_peers(self):
+        self.peer_stats()
+
         if not options.scrape_trackers:
             return
 
@@ -295,17 +343,23 @@ class Server(TCPServer):
 
         seen_peers = self.connected_peers.union(self.connecting_peers)
 
-        tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
-        self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
-
-        raise Return(tracker_response)
+        try:
+            tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
+            self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
+        except TrackerFailure as e:
+            print e
+        finally:
+            raise Return(tracker_response)
 
     @gen_debuggable
     def scrape_trackers(self):
         result = Future()
 
         for tracker in self.torrent.trackers:
-            self.scrape_tracker(tracker).add_done_callback(lambda future: self.tracker_done(future, result))
+            logging.info('Announcing to tracker %s', tracker.url)
+
+            future = tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
+            future.add_done_callback(lambda future: self.tracker_done(future, result))
 
         return result
 
@@ -315,7 +369,11 @@ class Server(TCPServer):
             logging.warning('Tracker could not be scraped: %s', future.exception())
             return
 
-        logging.info('Scraped tracker %s', future.result())
+        result = future.result()
+        seen_peers = self.connected_peers.union(self.connecting_peers)
+        self.unconnected_peers.update(set(result.peers) - seen_peers)
+
+        logging.info('Scraped tracker %s', result)
 
         if self.unconnected_peers:
             result_future.set_result(True)
@@ -337,7 +395,7 @@ class Server(TCPServer):
         if peer is None:
             peer = Peer(*address)
 
-        logging.info('Received a connection from %s', stream)
+        logging.info('Received a connection from %s', peer)
 
         client = Client(stream, peer, self)
         stream.set_close_callback(lambda: self.peer_not_connected(client))
@@ -359,10 +417,11 @@ class Server(TCPServer):
             logging.error('Peer disconnected: %s', client.peer)
             self.connected_peers.remove(client)
 
-        #self.connect_to_peers()
+        self.connect_to_peers()
 
     @gen_debuggable
     def peer_connected(self, client):
+        self.peer_stats()
         logging.info('Connected to %s', client.peer)
 
         self.connecting_peers.remove(client)
@@ -371,7 +430,8 @@ class Server(TCPServer):
     @gen_debuggable
     def announce_message(self, message):
         for client in self.connected_peers:
-            client.message_queue.append(message)
+            if not client.peer_choking:
+                client.send_message(message)
 
     @gen_debuggable
     def listen(self, port, address=""):
@@ -379,17 +439,23 @@ class Server(TCPServer):
 
         TCPServer.listen(self, port, address)
 
+    def peer_stats(self):
+        logging.error('We have {:>4} connected, {:>4} connecting, and {:>4} reserved.'.format(
+            len(self.connected_peers),
+            len(self.connecting_peers),
+            len(self.unconnected_peers)
+        ))
+
 
 
 if __name__ == '__main__':
     parse_command_line()
     enable_pretty_logging()
     #IOLoop.instance().set_blocking_log_threshold(0.1)
-    logging.getLogger().setLevel(logging.DEBUG)
 
     torrent = Torrent('torrents/[kickass.to]pixies.where.is.my.mind.torrent')
     
-    server = Server(torrent)
+    server = Server(torrent, max_peers=3)
     server.listen(options.port)
     server.start()
 

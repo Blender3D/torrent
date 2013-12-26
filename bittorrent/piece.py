@@ -155,7 +155,7 @@ class PiecedFileSystem(object):
         for index in range(self.num_blocks):
             self.verify_block(index)
 
-        return all(self.blocks.values())
+        return all(self.blocks)
 
     def to_bitfield(self):
         return {index: self.verify_block(index) for index in range(self.num_blocks)}

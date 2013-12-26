@@ -1,10 +1,12 @@
 import os
 import sys
-import struct
-import itertools
-import logging
 import errno
+import struct
+import inspect
+import logging
+import itertools
 
+from tornado.gen import Return
 from functools import wraps
 
 peer_address_struct = struct.Struct('!BBBBH')
@@ -58,11 +60,36 @@ def mkdirs(path):
 
 def gen_debuggable(function):
     @wraps(function)
-    def wrapper(*args, **kwargs):
+    def generator_wrapper(*args, **kwargs):
+        iterator = iter(function(*args, **kwargs))
+        while True:
+            try:
+                yield next(iterator)
+            except StopIteration:
+                return
+            except Return:
+                raise
+            except Exception as e:
+                logging.exception(e)
+                raise
+
+    @wraps(function)
+    def normal_wrapper(*args, **kwargs):
         try:
             return function(*args, **kwargs)
+        except Return:
+            raise
         except Exception as e:
             logging.exception(e)
             raise
 
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        return function(*args, **kwargs)
+
     return wrapper
+
+    if inspect.isgeneratorfunction(function):
+        return generator_wrapper
+    else:
+        return normal_wrapper
