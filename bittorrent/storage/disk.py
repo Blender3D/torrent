@@ -2,7 +2,7 @@ import os
 import hashlib
 import logging
 
-from .utils import ceil_div, create_and_open, mkdirs
+from bittorrent.utils import ceil_div, create_and_open, mkdirs
 
 class PiecedFile(object):
     def __init__(self, handle, size, offset=None):
@@ -10,7 +10,7 @@ class PiecedFile(object):
         self.size = size
         self.offset = offset
 
-class PiecedFileSystem(object):
+class DiskStorage(object):
     def __init__(self, files, block_size, block_hashes):
         self.files = []
         self.size = 0
@@ -110,7 +110,7 @@ class PiecedFileSystem(object):
         if offset + len(data) > self.block_size:
             raise ValueError('Cannot write across blocks')
 
-        if index == self.num_blocks - 1 and offset + length > self.last_block_size:
+        if index == self.num_blocks - 1 and offset + len(data) > self.last_block_size:
             raise ValueError('Cannot write past end of last block')
 
         position = self.block_size * index + offset
@@ -161,20 +161,7 @@ class PiecedFileSystem(object):
         return {index: self.verify_block(index) for index in range(self.num_blocks)}
 
     def piece_chart(self):
-        result = ''
-
-        for index in range(self.num_blocks):
-            data = self.read_block(index)
-            hash = hashlib.sha1(data).digest()
-
-            if hash == self.block_hashes[index]:
-                result += '*'
-            elif data.strip('\0') != '':
-                result += 'o'
-            else:
-                result += '.'
-
-        return result
+        return ''.join(['*' if self.verify_block(index) else '.' for index in range(self.num_blocks)])
 
     def percentage(self):
         b = self.to_bitfield()
@@ -182,7 +169,11 @@ class PiecedFileSystem(object):
         return 100 * float(sum(b.values())) / float(len(b))
 
     def __str__(self):
-        return '<PiecedFileSystem ' + self.piece_chart() + ' ' + str(self.percentage()) + '% >'
+        return '<{self.__class__.__name__} {chart} {percent}%>'.format(
+            self=self,
+            chart=self.piece_chart(),
+            percent=self.percentage()
+        )
 
     def __del__(self):
         for file in self.files:

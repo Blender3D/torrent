@@ -1,31 +1,15 @@
-import logging
-import socket
 import struct
 import random
-import functools
-
-from bittorrent.peer import Peer
-from bittorrent.torrent import Torrent
-from bittorrent.tracker import Tracker, TrackerFailure
-from bittorrent.piece import PiecedFileSystem
-from bittorrent.protocol.message import (Messages, KeepAlive, Choke,
-                                         Unchoke, Interested, NotInterested,
-                                         Have, Bitfield, Request, Piece, Cancel, Port)
+import logging
 
 from tornado.ioloop import IOLoop, PeriodicCallback
-from tornado.concurrent import Future
-from tornado.options import define, options, parse_command_line
-from tornado.iostream import IOStream
-from tornado.tcpserver import TCPServer
-from tornado.log import enable_pretty_logging
-from tornado.gen import coroutine, Task, Return, engine
+from tornado.gen import coroutine, Task, Return
 
-from bittorrent.utils import peer_id, gen_debuggable
-
-define('port', type=int, default=6881, help='The port on which we listen for connections')
-define('scrape_trackers', type=bool, default=True, help='Scrape trackers for peers')
-define('peer_ip', help='Manually connect to this peer\'s address')
-define('peer_port', type=int, help='Manually connect to this peer\'s port')
+from bittorrent.utils import gen_debuggable
+from bittorrent.protocol.message import (Messages, KeepAlive, Choke,
+                                         Unchoke, Interested, NotInterested,
+                                         Have, Bitfield, Request,
+                                         Piece, Cancel, Port)
 
 class Client(object):
     protocol = 'BitTorrent protocol'
@@ -131,15 +115,17 @@ class Client(object):
     @coroutine
     @gen_debuggable
     def message_loop(self):
-        bitfield = Bitfield(self.server.filesystem.to_bitfield())
+        logging.debug('Starting the message loop...')
+        bitfield = Bitfield(self.server.storage.to_bitfield())
 
         if bitfield:
+            logging.debug('First message is a bitfield. Recording...')
             self.send_message(bitfield)
 
         while True:
             message_type, message = yield self.get_message()
 
-            logging.info('Client sent us a %s', message.__class__.__name__)
+            logging.debug('Client sent us a %s', message.__class__.__name__)
 
             try:
                 if isinstance(message, KeepAlive):
@@ -173,12 +159,12 @@ class Client(object):
             continue
 
             if self.is_endgame:
-                if self.server.filesystem.verify():
+                if self.server.storage.verify():
                     logging.info('We got the file!')
                     IOLoop.instance().stop()
 
                 for piece in self.missing_pieces:
-                    for start in range(0, self.server.filesystem.block_size, 2**14):
+                    for start in range(0, self.server.storage.block_size, 2**14):
                         self.server.announce_message(Request(piece, start, 2**14))
 
     def got_choke(self, message):
@@ -192,12 +178,14 @@ class Client(object):
         if not self.am_interested:
             return
 
+        self.stop_if_completed()
+
         piece = random.choice(self.desired_pieces())
 
-        if piece == self.server.filesystem.num_blocks - 1:
-            size = self.server.filesystem.last_block_size
+        if piece == self.server.storage.num_blocks - 1:
+            size = self.server.storage.last_block_size
         else:
-            size = self.server.filesystem.block_size
+            size = self.server.storage.block_size
 
         length = min(size, 2**14)
 
@@ -208,8 +196,13 @@ class Client(object):
             end = length * (size // length)
             self.send_message(Request(piece, end, size - end))
 
+    def stop_if_completed(self):
+        if not self.desired_pieces() and self.server.storage.verify():
+            logging.info('We got the file!')
+            IOLoop.instance().stop()
+
     def got_bitfield(self, message):
-        truncated = {key: value for key, value in message.bitfield.items() if key < self.server.filesystem.num_blocks}
+        truncated = {key: value for key, value in message.bitfield.items() if key < self.server.storage.num_blocks}
 
         self.peer_blocks = truncated
         self.maybe_express_interest()
@@ -221,23 +214,20 @@ class Client(object):
     def got_piece(self, message):
         logging.debug('Piece info: %d, %d, %d', message.index, message.begin, len(message.block))
         #self.peer.add_data_sample(len(message.block))
-        self.server.filesystem.write_piece(message.index, message.begin, message.block)
+        self.server.storage.write_piece(message.index, message.begin, message.block)
 
-        if self.server.filesystem.verify_block(message.index):
+        if self.server.storage.verify_block(message.index):
             logging.info('Got a complete block!')
-            logging.critical(self.server.filesystem)
+            logging.critical(self.server.storage)
 
-            if self.server.filesystem.verify():
-                logging.info('We got the file!')
-                IOLoop.instance().stop()
-
+            self.stop_if_completed()
             self.server.announce_message(Have(message.index))
 
     def got_request(self, message):
         if message.length > 2**15:
             raise ValueError('Requested too much data')
 
-        data = self.server.filesystem.read_piece(message.index, message.begin, message.length)
+        data = self.server.storage.read_piece(message.index, message.begin, message.length)
         self.send_message(Piece(message.index, message.begin, data))
     
     def got_interested(self, message):
@@ -248,7 +238,7 @@ class Client(object):
 
     @gen_debuggable
     def desired_pieces(self):
-        want = [p for p in self.peer_blocks if not self.server.filesystem.blocks[p]]
+        want = [p for p in self.peer_blocks if not self.server.storage.blocks[p]]
         logging.debug('I want %s', repr(want))
 
         return want
@@ -280,183 +270,14 @@ class Client(object):
     @property
     @gen_debuggable
     def missing_pieces(self):
-        return [i for i in range(self.server.filesystem.num_blocks) if not self.server.filesystem.blocks[i]]
+        return [i for i in range(self.server.storage.num_blocks) if not self.server.storage.blocks[i]]
 
     @property
     @gen_debuggable
     def is_endgame(self):
-        return len(self.missing_pieces) / float(self.server.filesystem.num_blocks) < 0.05
+        return len(self.missing_pieces) / float(self.server.storage.num_blocks) < 0.05
 
     @gen_debuggable
     def disconnected(self, result=None):
         logging.info('Peer disconnected %s', self.peer)
         self.keepalive_callback.stop()
-
-
-
-class Server(TCPServer):
-    @gen_debuggable
-    def __init__(self, torrent, max_peers=50, download_path='downloads'):
-        TCPServer.__init__(self)
-
-        self.peer_id = peer_id()
-        self.torrent = torrent
-
-        self.max_peers = max_peers
-        self.connected_peers = set()
-        self.connecting_peers = set()
-        self.unconnected_peers = set()
-
-        self.filesystem = PiecedFileSystem.from_torrent(torrent, base_path=download_path)
-
-    @coroutine
-    @gen_debuggable
-    def start(self, num_processes=1):
-        TCPServer.start(self, num_processes)
-
-        self.connect_to_peers()
-
-        if options.peer_ip:
-            self.connect(Peer(options.peer_ip, options.peer_port, None))
-
-    @coroutine
-    @gen_debuggable
-    def connect_to_peers(self):
-        self.peer_stats()
-
-        if not options.scrape_trackers:
-            return
-
-        num_active = len(self.connected_peers) + len(self.connecting_peers)
-
-        if num_active != self.max_peers and not self.unconnected_peers:
-            logging.info('No peers to choose from. Scraping trackers..')
-            yield self.scrape_trackers()
-
-        for i in range(min(len(self.unconnected_peers), self.max_peers - num_active)):
-            self.connect(self.unconnected_peers.pop())
-
-    @coroutine
-    @gen_debuggable
-    def scrape_tracker(self, tracker):
-        logging.info('Announcing to tracker %s', tracker.url)
-
-        seen_peers = self.connected_peers.union(self.connecting_peers)
-
-        try:
-            tracker_response = yield tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
-            self.unconnected_peers.update(set(tracker_response.peers) - seen_peers)
-        except TrackerFailure as e:
-            print e
-        finally:
-            raise Return(tracker_response)
-
-    @gen_debuggable
-    def scrape_trackers(self):
-        result = Future()
-
-        for tracker in self.torrent.trackers:
-            logging.info('Announcing to tracker %s', tracker.url)
-
-            future = tracker.announce(self.peer_id, self.port, event='started', num_wanted=50)
-            future.add_done_callback(lambda future: self.tracker_done(future, result))
-
-        return result
-
-    @gen_debuggable
-    def tracker_done(self, future, result_future):
-        if future.exception():
-            logging.warning('Tracker could not be scraped: %s', future.exception())
-            return
-
-        result = future.result()
-        seen_peers = self.connected_peers.union(self.connecting_peers)
-        self.unconnected_peers.update(set(result.peers) - seen_peers)
-
-        logging.info('Scraped tracker %s', result)
-
-        if self.unconnected_peers:
-            result_future.set_result(True)
-
-    @coroutine
-    @gen_debuggable
-    def connect(self, peer):
-        logging.info('Connecting to %s', peer)
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
-        stream = IOStream(sock)
-        yield Task(stream.connect, (peer.address, peer.port))
-
-        self.handle_stream(stream, (peer.address, peer.port), peer)
-
-    @coroutine
-    @gen_debuggable
-    def handle_stream(self, stream, address, peer=None):
-        if peer is None:
-            peer = Peer(*address)
-
-        logging.info('Received a connection from %s', peer)
-
-        client = Client(stream, peer, self)
-        stream.set_close_callback(lambda: self.peer_not_connected(client))
-
-        self.connecting_peers.add(client)
-        self.peer_connected(client)
-
-        try:
-            yield Task(client.handshake)
-        except Exception as e:
-            logging.exception(e)
-
-    @gen_debuggable
-    def peer_not_connected(self, client):
-        if client in self.connecting_peers:
-            logging.error('Could not connect to %s', client.peer)
-            self.connecting_peers.remove(client)
-        elif client in self.connected_peers:
-            logging.error('Peer disconnected: %s', client.peer)
-            self.connected_peers.remove(client)
-
-        self.connect_to_peers()
-
-    @gen_debuggable
-    def peer_connected(self, client):
-        self.peer_stats()
-        logging.info('Connected to %s', client.peer)
-
-        self.connecting_peers.remove(client)
-        self.connected_peers.add(client)
-
-    @gen_debuggable
-    def announce_message(self, message):
-        for client in self.connected_peers:
-            if not client.peer_choking:
-                client.send_message(message)
-
-    @gen_debuggable
-    def listen(self, port, address=""):
-        self.port = port
-
-        TCPServer.listen(self, port, address)
-
-    def peer_stats(self):
-        logging.error('We have {:>4} connected, {:>4} connecting, and {:>4} reserved.'.format(
-            len(self.connected_peers),
-            len(self.connecting_peers),
-            len(self.unconnected_peers)
-        ))
-
-
-
-if __name__ == '__main__':
-    parse_command_line()
-    enable_pretty_logging()
-    #IOLoop.instance().set_blocking_log_threshold(0.1)
-
-    torrent = Torrent('torrents/[kickass.to]pixies.where.is.my.mind.torrent')
-    
-    server = Server(torrent, max_peers=3)
-    server.listen(options.port)
-    server.start()
-
-    IOLoop.instance().start()

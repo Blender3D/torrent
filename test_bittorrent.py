@@ -10,7 +10,7 @@ from bittorrent.tracker import Tracker, HTTPTracker, UDPTracker, TrackerResponse
 
 class TestTorrentReader(unittest.TestCase):
     def test_read(self):
-        Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
+        Torrent('torrents/archlinux-2013.12.01-dual.iso.torrent')
 
 class TestProtocolMessages(unittest.TestCase):
     def test_keep_alive(self):
@@ -58,8 +58,8 @@ class TestTracker(AsyncTestCase):
 
     @gen_test
     def test_http(self):
-        torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
-        tracker = Tracker('http://torrent.ubuntu.com:6969/announce', torrent)
+        torrent = Torrent('torrents/archlinux-2013.12.01-dual.iso.torrent')
+        tracker = Tracker('http://tracker.archlinux.org:6969/announce', torrent)
 
         response = yield tracker.announce(utils.peer_id(), 6881)
 
@@ -67,8 +67,8 @@ class TestTracker(AsyncTestCase):
 
     @gen_test
     def test_udp(self):
-        torrent = Torrent('torrents/ubuntu-13.04-desktop-amd64.iso.torrent')
-        tracker = Tracker('udp://tracker.ccc.de:80', torrent)
+        torrent = Torrent('torrents/archlinux-2013.12.01-dual.iso.torrent')
+        tracker = Tracker('udp://tracker.openbittorrent.com:80/announce', torrent)
 
         response = yield tracker.announce(utils.peer_id(), 6881)
 

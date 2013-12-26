@@ -47,7 +47,7 @@ class HTTPTracker(object):
         decoded_body = bencode.decode(response.body)
 
         if 'failure reason' in decoded_body:
-            raise Return(TrackerFailure(decoded_body['TrackerFailure']))
+            raise TrackerFailure(decoded_body['failure reason'])
 
         peers = list(self.get_peers(decoded_body))
         result = TrackerResponse(peers, decoded_body['interval'])
