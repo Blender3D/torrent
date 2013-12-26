@@ -10,7 +10,13 @@ library.
  - Pure-Python. No libtorrent!
  - HTTP and UDP tracker support
  - Downloads files (works best for smaller ones)
- - Supports Python 2 and Python 3
+ - Supports Python 2 (and Python 3 every few commits)
+
+## Usage
+
+Run the CLI frontend and watch the hacker text fly:
+
+    user@hostname:~$ python -m bittorrent.client.cli --torrent=filename.torrent --path=/tmp/downloads
 
 ## Broken Stuff
 
@@ -26,8 +32,7 @@ library.
  - `bittorrent.bencode` is incredibly slow
  - No cool UI
 
-## Usage
+## Heisenbugs
 
-Run the CLI frontend:
-
-    user@hostname:~$ python -m bittorrent.client.cli --torrent=filename.torrent --path=/tmp/downloads
+ - Sometimes *all* of the socket connections die with `ECONNREFUSED`
+ - Sometimes we start aggressively scraping trackers over and over.
